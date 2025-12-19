@@ -26,9 +26,16 @@ links_col = db["links"]
 sessions_col = db["sessions"]
 
 async def init_db():
-    # 10 Minute session expiry
+    # 1. Sessions cleanup: 10 Minute mein expire
     try:
         await sessions_col.create_index("created_at", expireAfterSeconds=600)
+    except:
+        pass
+
+    # 2. Links cleanup: 30 Din (2592000 seconds) mein expire
+    # Taaki purane unused links DB full na karein
+    try:
+        await links_col.create_index("created_at", expireAfterSeconds=2592000)
     except:
         pass
 
@@ -52,13 +59,22 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
     if not url:
         return JSONResponse(content={"status": "error", "message": "URL missing"}, status_code=400)
 
-    # 2. Save to DB
-    link_id = secrets.token_urlsafe(6)
-    await links_col.insert_one({
-        "link_id": link_id,
-        "original_url": url,
-        "created_at": time.time()
-    })
+    # 2. Check for Duplicate (Space Saving)
+    # Agar URL pehle se DB me hai, to naya mat banao, wahi use karo.
+    existing_link = await links_col.find_one({"original_url": url})
+    
+    if existing_link:
+        link_id = existing_link["link_id"]
+        # Expiry time refresh kar do (taaki ye link delete na ho)
+        await links_col.update_one({"_id": existing_link["_id"]}, {"$set": {"created_at": time.time()}})
+    else:
+        # Naya banao
+        link_id = secrets.token_urlsafe(6)
+        await links_col.insert_one({
+            "link_id": link_id,
+            "original_url": url,
+            "created_at": time.time()
+        })
     
     # 3. Generate Response
     base_url = get_base_url(request)
