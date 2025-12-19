@@ -1,6 +1,8 @@
 import os
 import time
 import secrets
+import json
+import urllib.request
 from urllib.parse import quote
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -13,9 +15,9 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://hnyx:wywyw2@cluster0.9dxlslv.m
 # Is password ko API Key ki tarah use karein
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "MY_SECRET_PASS_123")
 
-# Aapka Shortener Domain
+# Aapka Shortener Domain & API
 SHORTENER_DOMAIN = "nanolinks.in"
-MIN_TIME_SECONDS = 15 
+SHORTENER_API = "ae0271c2c57105db2fa209f5b0f20c1a965343f6"
 
 # ================= DATABASE SETUP =================
 client = AsyncIOMotorClient(MONGO_URI)
@@ -60,13 +62,31 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
     
     # 3. Generate Response
     base_url = get_base_url(request)
-    # Yeh link protected hai (Redirects to Shortener -> Verify -> Original)
-    shortened_url = f"{base_url}/s/{link_id}"
+    # The "Start Page" URL that needs to be shortened
+    target_url = f"{base_url}/s/{link_id}"
     
+    # 4. Call Shortener API (Nanolinks)
+    final_short_url = target_url # Default fallback
+    
+    if SHORTENER_API:
+        try:
+            # Construct API call to Nanolinks
+            api_req_url = f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(target_url)}"
+            
+            # Make the request (using standard library to avoid extra dependencies)
+            with urllib.request.urlopen(api_req_url) as response:
+                data = json.loads(response.read().decode())
+                if data.get("status") == "success":
+                    final_short_url = data.get("shortenedUrl")
+        except Exception as e:
+            print(f"Shortener API Error: {e}")
+            # If API fails, we still return our local URL so the process doesn't break
+            pass
+
     # EXACT JSON FORMAT JO AAPNE MANGA
     return {
         "status": "success",
-        "shortenedUrl": shortened_url
+        "shortenedUrl": final_short_url
     }
 
 # ================= USER ROUTES (DO NOT CHANGE) =================
@@ -105,10 +125,8 @@ async def verify_session(token: str = Query(...)):
     if not session:
         return HTMLResponse("Session Expired", status_code=400)
 
-    # Time Check
-    if (time.time() - session["start_time"]) < MIN_TIME_SECONDS:
-        return HTMLResponse(f"<h3>🚫 Too Fast! Please wait {MIN_TIME_SECONDS} seconds on the shortener page.</h3>", status_code=403)
-
+    # Time Check Removed as per request
+    
     # Get Original Link
     link_data = await links_col.find_one({"link_id": session["link_id"]})
     await sessions_col.delete_one({"_id": session["_id"]}) # Security: Delete token
