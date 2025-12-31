@@ -1,6 +1,6 @@
 # ===============================================
 # Shortener API with Encrypted Token Security
-# All data encrypted inside token - Nothing visible
+# Using ONLY Python built-in modules (no cryptography)
 # ===============================================
 
 import os
@@ -9,7 +9,7 @@ import secrets
 import json
 import base64
 import hashlib
-from cryptography.fernet import Fernet
+import hmac
 import urllib.request
 from urllib.parse import quote
 from fastapi import FastAPI, Request, Query
@@ -23,11 +23,8 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
 SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
 SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
 
-# Secret key for encryption - MUST BE 32 BYTES for Fernet
-# Generate secure key: base64.urlsafe_b64encode(os.urandom(32))
-_secret = os.getenv("ENCRYPTION_SECRET", "MyUltraSecretKey2024XYZ12345678")
-# Convert to Fernet-compatible key (32 bytes base64 encoded)
-ENCRYPTION_KEY = base64.urlsafe_b64encode(hashlib.sha256(_secret.encode()).digest())
+# Secret key for encryption - KEEP PRIVATE!
+SECRET_KEY = os.getenv("SECRET_KEY", "MyUltraSecretKey2024XYZ!@#$%^&*")
 
 # Link expires after 30 days
 LINK_EXPIRY_SECONDS = 30 * 24 * 60 * 60
@@ -54,43 +51,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================= ENCRYPTION FUNCTIONS =================
+# ================= ENCRYPTION FUNCTIONS (Built-in only) =================
 
-def encrypt_data(data: dict) -> str:
+def _xor_encrypt(data: bytes, key: bytes) -> bytes:
+    """XOR encryption with repeating key"""
+    return bytes([data[i] ^ key[i % len(key)] for i in range(len(data))])
+
+def _get_key_bytes() -> bytes:
+    """Generate key bytes from secret"""
+    return hashlib.sha256(SECRET_KEY.encode()).digest()
+
+def encrypt_token(data: dict) -> str:
     """
     Encrypt data into URL-safe token
-    Data contains: url, created_at, random_id
+    Format: base64(xor_encrypted(json_data)) + "." + hmac_signature
     """
     try:
-        f = Fernet(ENCRYPTION_KEY)
-        json_data = json.dumps(data)
-        encrypted = f.encrypt(json_data.encode())
-        # Make URL safe
-        token = encrypted.decode().replace('+', '-').replace('/', '_').replace('=', '')
+        key = _get_key_bytes()
+        json_data = json.dumps(data, separators=(',', ':'))
+        
+        # XOR encrypt
+        encrypted = _xor_encrypt(json_data.encode(), key)
+        
+        # Base64 encode (URL safe)
+        b64_data = base64.urlsafe_b64encode(encrypted).decode().rstrip('=')
+        
+        # Add HMAC signature for integrity
+        signature = hmac.new(key, b64_data.encode(), hashlib.sha256).hexdigest()[:16]
+        
+        # Combine: data.signature
+        token = f"{b64_data}.{signature}"
         return token
     except Exception as e:
         print(f"Encryption error: {e}")
         return None
 
-def decrypt_data(token: str) -> dict:
+def decrypt_token(token: str) -> dict:
     """
     Decrypt token back to data
     Returns None if invalid/tampered
     """
     try:
-        # Restore base64 padding
-        token = token.replace('-', '+').replace('_', '/')
-        padding = 4 - len(token) % 4
-        if padding != 4:
-            token += '=' * padding
+        # Split token and signature
+        if '.' not in token:
+            return None
         
-        f = Fernet(ENCRYPTION_KEY)
-        decrypted = f.decrypt(token.encode())
+        parts = token.rsplit('.', 1)
+        if len(parts) != 2:
+            return None
+        
+        b64_data, signature = parts
+        key = _get_key_bytes()
+        
+        # Verify signature first
+        expected_sig = hmac.new(key, b64_data.encode(), hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(signature, expected_sig):
+            return None  # Tampered!
+        
+        # Restore base64 padding
+        padding = 4 - len(b64_data) % 4
+        if padding != 4:
+            b64_data += '=' * padding
+        
+        # Base64 decode
+        encrypted = base64.urlsafe_b64decode(b64_data)
+        
+        # XOR decrypt
+        decrypted = _xor_encrypt(encrypted, key)
+        
+        # Parse JSON
         data = json.loads(decrypted.decode())
         return data
     except Exception as e:
-        # Any error = invalid/tampered token
-        return None
+        return None  # Any error = invalid token
 
 def get_base_url(request: Request):
     """Get base URL with HTTPS"""
@@ -107,8 +140,6 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
     Create a protected short link
     
     Usage: /api?api=YOUR_KEY&url=https://example.com
-    
-    Returns encrypted token containing all data
     """
     
     # 1. Validate API key
@@ -118,22 +149,22 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
     if not url:
         return JSONResponse({"status": "error", "message": "URL missing"}, status_code=400)
     
-    # 2. Generate unique random ID for this link
+    # 2. Generate unique random ID
     random_id = secrets.token_urlsafe(8)
     
     # 3. Create encrypted token with all data inside
     token_data = {
-        "u": url,                    # Original URL (shortened key)
+        "u": url,                    # Original URL
         "t": int(time.time()),       # Created timestamp
         "i": random_id               # Unique ID
     }
     
-    encrypted_token = encrypt_data(token_data)
+    encrypted_token = encrypt_token(token_data)
     
     if not encrypted_token:
         return JSONResponse({"status": "error", "message": "Token generation failed"}, status_code=500)
     
-    # 4. Save to database for stats (optional, token is self-contained)
+    # 4. Save to database for stats
     await links_col.update_one(
         {"random_id": random_id},
         {"$set": {
@@ -146,7 +177,7 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
         upsert=True
     )
     
-    # 5. Build redirect URL - Only token visible, nothing else
+    # 5. Build redirect URL - Only encrypted token visible
     base_url = get_base_url(request)
     redirect_url = f"{base_url}/redirect?token={encrypted_token}"
     
@@ -175,9 +206,7 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
 async def redirect_page(request: Request, token: str = Query(None)):
     """
     Redirect with encrypted token verification
-    
-    Token contains encrypted: url, timestamp, random_id
-    If decryption fails = Bypass attempt
+    If decryption fails = Bypass/Invalid
     """
     
     if not token:
@@ -192,11 +221,10 @@ async def redirect_page(request: Request, token: str = Query(None)):
         """, status_code=400)
     
     # 1. Try to decrypt token
-    data = decrypt_data(token)
+    data = decrypt_token(token)
     
     # 2. If decryption failed = Invalid/Tampered/Bypass
     if not data:
-        # Try to find any matching partial token in DB for stats
         await links_col.update_one(
             {"random_id": "bypass_attempts"},
             {"$inc": {"bypassed_count": 1}},
@@ -256,12 +284,12 @@ async def redirect_page(request: Request, token: str = Query(None)):
         </html>
         """, status_code=403)
     
-    # 3. Token decrypted successfully - Get data
+    # 3. Token valid - Get data
     original_url = data.get("u")
     created_at = data.get("t", 0)
     random_id = data.get("i", "")
     
-    # 4. Check if link expired (30 days)
+    # 4. Check if link expired
     if time.time() - created_at > LINK_EXPIRY_SECONDS:
         return HTMLResponse("""
         <html>
@@ -273,14 +301,14 @@ async def redirect_page(request: Request, token: str = Query(None)):
         </html>
         """, status_code=410)
     
-    # 5. Update click count in database
+    # 5. Update click count
     if random_id:
         await links_col.update_one(
             {"random_id": random_id},
             {"$inc": {"clicks": 1}}
         )
     
-    # 6. SUCCESS - Redirect to original URL
+    # 6. SUCCESS - Redirect
     return HTMLResponse(f"""
     <!DOCTYPE html>
     <html>
@@ -315,15 +343,9 @@ async def redirect_page(request: Request, token: str = Query(None)):
 async def home():
     """API Info"""
     return {
-        "service": "Shortener API with Encrypted Token Security",
-        "version": "4.0",
-        "security": "Fernet (AES-128-CBC) Encrypted Tokens",
-        "features": [
-            "All data encrypted in token",
-            "No visible parameters",
-            "Tamper-proof verification",
-            "Auto-expiry support"
-        ],
+        "service": "Shortener API with Encrypted Token",
+        "version": "4.1",
+        "security": "XOR + HMAC-SHA256 (No external dependencies)",
         "endpoints": {
             "/api?api=KEY&url=URL": "Create protected short link",
             "/redirect?token=XXX": "Secure redirect"
@@ -341,11 +363,9 @@ async def stats(api: str = Query(None)):
     
     total_links = await links_col.count_documents({"original_url": {"$exists": True}})
     
-    # Get bypass attempts
     bypass_doc = await links_col.find_one({"random_id": "bypass_attempts"})
     bypass_count = bypass_doc.get("bypassed_count", 0) if bypass_doc else 0
     
-    # Get top 10 links by clicks
     top_links = await links_col.find({"original_url": {"$exists": True}}).sort("clicks", -1).limit(10).to_list(10)
     
     links_data = []
