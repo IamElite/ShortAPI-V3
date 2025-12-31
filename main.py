@@ -119,6 +119,44 @@ async def log_request(req: Request, event: str, details: dict = {}):
     }
     await DB['logs'].insert_one(log_entry)
 
+@app.get("/")
+async def homepage():
+    return HTMLResponse("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SYNTAX REALM</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:linear-gradient(135deg,#0a0a0a 0%,#1a1a2e 100%);color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
+        .container{text-align:center}
+        .logo-circle{width:120px;height:120px;border-radius:50%;border:3px solid #2563eb;margin:0 auto 1.5rem;overflow:hidden;box-shadow:0 0 30px rgba(37,99,235,0.3)}
+        .logo-circle img{width:100%;height:100%;object-fit:cover}
+        .brand{font-size:3rem;font-weight:800;letter-spacing:8px;background:linear-gradient(90deg,#2563eb,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+        .sub{font-size:1.5rem;font-weight:300;color:#888;letter-spacing:4px;margin-top:0.5rem}
+        .status{margin-top:2rem;display:inline-flex;align-items:center;gap:8px;background:#111;padding:10px 20px;border-radius:50px;border:1px solid #222}
+        .dot{width:10px;height:10px;background:#22c55e;border-radius:50%;animation:pulse 2s infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+        .status-text{color:#888;font-size:0.9rem}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo-circle">
+            <img src="https://i.ibb.co/placeholder.png" alt="Logo" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%232563eb%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2240%22 font-family=%22system-ui%22>S</text></svg>'">
+        </div>
+        <h1 class="brand">SYNTAX</h1>
+        <p class="sub">REALM</p>
+        <div class="status">
+            <div class="dot"></div>
+            <span class="status-text">Server is Live</span>
+        </div>
+    </div>
+</body>
+</html>
+    """)
+
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
     if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
