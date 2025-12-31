@@ -137,7 +137,7 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
                 d = json.loads(r.read().decode())
                 if d.get("status") == "success": final = d.get("shortenedUrl")
         except: pass
-    return {"status": "success", "shortenedUrl": final}
+    return {"status": "success", "shortenedUrl": final, "directUrl": red_url}
 
 @app.get("/redirect")
 async def redirect_page(request: Request, token: str = Query(None)):
