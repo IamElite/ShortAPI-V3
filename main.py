@@ -88,9 +88,9 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
 
 @app.get("/redirect")
 async def redirect_page(request: Request, token: str = Query(None)):
-    await log_request(request, "REDIRECT_PAGE_HIT", {"token": token[:20] if token else "NONE"})
-    
     if not token: return HTMLResponse("Blocked", 403)
+    
+    await log_request(request, "REDIRECT_PAGE_HIT", {"token": token[:20]})
     data = decrypt_token(token)
     if not data: return HTMLResponse("Invalid", 403)
     
@@ -256,3 +256,4 @@ async def start():
     await logs_col.delete_many({})
     asyncio.create_task(auto_cleanup_task())
     print("SERVER ONLINE")
+
