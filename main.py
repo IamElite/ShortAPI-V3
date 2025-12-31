@@ -91,24 +91,45 @@ def get_client_ip(request: Request) -> str:
     return request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
 
 def is_suspicious_traffic(request: Request) -> bool:
-    """Detects proxies, Tor, and automation headers"""
+    """Detects advanced proxies and automation tools"""
+    # X-Forwarded-Proto is standard for SSL proxies (Cloudflare, etc.) - REMOVED
+    # Via is sometimes used by legitimate mobile networks - REMOVED
     bad_headers = [
-        "x-proxy-id", "x-forwarded-proto", "via", "forwarded", 
-        "x-authenticated-proxy", "x-proxy-user"
+        "x-proxy-id", "x-authenticated-proxy", "x-proxy-user"
     ]
     for h in bad_headers:
         if request.headers.get(h): return True
     
-    # Check for empty or generic UA common in simple proxy bots
+    # Check for direct bot signatures
     ua = request.headers.get("User-Agent", "").lower()
-    if not ua or "curl" in ua or "python" in ua or "wget" in ua: return True
+    if not ua or any(bot in ua for bot in ["curl", "python", "wget", "aiohttp", "httpx"]):
+        return True
     
     return False
 
 def check_referer_is_valid(referer: str) -> bool:
-    if not referer: return False
+    """
+    Check if the referer is from our shortener.
+    If referer is missing, we allow it (many browsers strip it for privacy),
+    but we block if it's from a KNOWN bypass site.
+    """
+    if not referer:
+        return True # Allow empty (privacy modes)
+    
     domain = urlparse(referer).netloc.lower()
-    return SHORTENER_DOMAIN.lower() in domain
+    
+    # Block known bypass sites (add more as needed)
+    bypass_domains = ["bypass.vip", "adbypass.org", "skip.me", "direct.link"]
+    if any(bd in domain for bd in bypass_domains):
+        return False
+        
+    # If referer is present, it should ideally contain our shortener domain
+    if SHORTENER_DOMAIN.lower() in domain:
+        return True
+        
+    # If referer is present but not our shortener, it might be a search engine or social app
+    # We'll be lenient here to prevent blocking real users from FB/TG etc.
+    return True
 
 async def create_secure_session(request: Request, link_id: str) -> dict:
     session_id = secrets.token_hex(32)
