@@ -1,6 +1,6 @@
 # ===============================================
-# Shortener API - ULTRA REINFORCED SECURITY v7.0
-# Optimized Speed + Advanced Anti-Proxy/Bot Protection
+# Shortener API - IRON GATE v10.0 (REFERER-LOCKED)
+# Blocks Bypassed Links Shared in Telegram/Bots
 # ===============================================
 
 import os
@@ -12,7 +12,7 @@ import hashlib
 import hmac
 import urllib.request
 from urllib.parse import quote, urlparse
-from fastapi import FastAPI, Request, Query, Response
+from fastapi import FastAPI, Request, Query, Response, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,13 +23,11 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
 SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
 SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
 
-# Secret keys
-SECRET_KEY = os.getenv("SECRET_KEY", "CyberSafe2025!@#")
-CHALLENGE_SECRET = os.getenv("CHALLENGE_SECRET", "HyperChallenge2025!@#")
+SECRET_KEY = os.getenv("SECRET_KEY", "RefererLock2025!@#")
 
-# Timing & Security
-LINK_EXPIRY_SECONDS = 30 * 24 * 60 * 60
-SESSION_EXPIRY = 300 # 5 minutes is enough
+# Timing & Cleanup
+LINK_EXPIRY_SECONDS = 3 * 24 * 60 * 60 # 3 Days
+SESSION_EXPIRY = 600
 
 # ================= DATABASE SETUP =================
 client = AsyncIOMotorClient(MONGO_URI)
@@ -42,7 +40,6 @@ async def init_db():
         await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY_SECONDS)
         await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
         await links_col.create_index("random_id", unique=True)
-        await sessions_col.create_index("session_id", unique=True)
     except: pass
 
 app = FastAPI(on_startup=[init_db])
@@ -56,112 +53,36 @@ app.add_middleware(
 
 # ================= SECURITY HELPERS =================
 
-def _get_key(salt: str = "") -> bytes:
-    return hashlib.sha256((SECRET_KEY + salt).encode()).digest()
-
-def _xor_cipher(data: bytes, key: bytes) -> bytes:
-    return bytes([data[i] ^ key[i % len(key)] for i in range(len(data))])
-
-def encrypt_token(data: dict) -> str:
-    try:
-        key = _get_key("token")
-        json_data = json.dumps(data, separators=(',', ':'))
-        encrypted = _xor_cipher(json_data.encode(), key)
-        b64 = base64.urlsafe_b64encode(encrypted).decode().rstrip('=')
-        sig = hmac.new(key, b64.encode(), hashlib.sha256).hexdigest()[:16]
-        return f"{b64}.{sig}"
-    except: return None
-
-def decrypt_token(token: str) -> dict:
-    try:
-        b64, sig = token.rsplit('.', 1)
-        key = _get_key("token")
-        if not hmac.compare_digest(sig, hmac.new(key, b64.encode(), hashlib.sha256).hexdigest()[:16]): return None
-        pad = 4 - len(b64) % 4
-        if pad != 4: b64 += '=' * pad
-        dec = _xor_cipher(base64.urlsafe_b64decode(b64), key)
-        return json.loads(dec.decode())
-    except: return None
-
-# ================= ADVANCED PROTECTION =================
-
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     if xff: return xff.split(",")[0].strip()
     return request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
 
-def is_suspicious_traffic(request: Request) -> bool:
-    """Detects advanced proxies and automation tools"""
-    # X-Forwarded-Proto is standard for SSL proxies (Cloudflare, etc.) - REMOVED
-    # Via is sometimes used by legitimate mobile networks - REMOVED
-    bad_headers = [
-        "x-proxy-id", "x-authenticated-proxy", "x-proxy-user"
-    ]
-    for h in bad_headers:
-        if request.headers.get(h): return True
-    
-    # Check for direct bot signatures
-    ua = request.headers.get("User-Agent", "").lower()
-    if not ua or any(bot in ua for bot in ["curl", "python", "wget", "aiohttp", "httpx"]):
-        return True
-    
-    return False
+def encrypt_token(data: dict) -> str:
+    key = hashlib.sha256(SECRET_KEY.encode()).digest()
+    msg = json.dumps(data, separators=(',', ':')).encode()
+    enc = bytes([msg[i] ^ key[i % len(key)] for i in range(len(msg))])
+    b64 = base64.urlsafe_b64encode(enc).decode().rstrip('=')
+    sig = hmac.new(key, b64.encode(), hashlib.sha256).hexdigest()[:12]
+    return f"{b64}.{sig}"
 
-def check_referer_is_valid(referer: str) -> bool:
-    """
-    Check if the referer is from our shortener.
-    If referer is missing, we allow it (many browsers strip it for privacy),
-    but we block if it's from a KNOWN bypass site.
-    """
-    if not referer:
-        return True # Allow empty (privacy modes)
-    
+def decrypt_token(token: str) -> dict:
+    try:
+        b64, sig = token.rsplit('.', 1)
+        key = hashlib.sha256(SECRET_KEY.encode()).digest()
+        if not hmac.compare_digest(sig, hmac.new(key, b64.encode(), hashlib.sha256).hexdigest()[:12]): return None
+        pad = 4 - len(b64) % 4
+        if pad != 4: b64 += '=' * pad
+        enc = base64.urlsafe_b64decode(b64)
+        dec = bytes([enc[i] ^ key[i % len(enc)] for i in range(len(enc))])
+        return json.loads(dec.decode())
+    except: return None
+
+def is_valid_referer(referer: str) -> bool:
+    """STRICT: Check if coming from shortener domain"""
+    if not referer: return False
     domain = urlparse(referer).netloc.lower()
-    
-    # Block known bypass sites (add more as needed)
-    bypass_domains = ["bypass.vip", "adbypass.org", "skip.me", "direct.link"]
-    if any(bd in domain for bd in bypass_domains):
-        return False
-        
-    # If referer is present, it should ideally contain our shortener domain
-    if SHORTENER_DOMAIN.lower() in domain:
-        return True
-        
-    # If referer is present but not our shortener, it might be a search engine or social app
-    # We'll be lenient here to prevent blocking real users from FB/TG etc.
-    return True
-
-async def create_secure_session(request: Request, link_id: str) -> dict:
-    session_id = secrets.token_hex(32)
-    referer = request.headers.get("referer", "")
-    ip = get_client_ip(request)
-    ua = request.headers.get("User-Agent", "")[:250]
-    
-    # Strict bypass detection
-    is_bypassed = not check_referer_is_valid(referer)
-    is_suspicious = is_suspicious_traffic(request)
-    
-    # JS Challenge
-    s1, s2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
-    salt_val = secrets.randbelow(1000000)
-    # Challenge logic: (s1 * s2) + salt_val
-    expr = f"({s1} * {s2}) + {salt_val}"
-    ans = str((s1 * s2) + salt_val)
-    
-    csrf = secrets.token_urlsafe(32)
-    
-    await sessions_col.insert_one({
-        "session_id": session_id,
-        "link_id": link_id,
-        "ip": ip,
-        "ua": ua,
-        "csrf": csrf,
-        "ans": ans,
-        "is_bypassed": is_bypassed or is_suspicious, # BLOCK IF SUSPICIOUS
-        "created_at": time.time(),
-        "used": False
-    })
-    return {"sid": session_id, "csrf": csrf, "expr": expr}
+    return SHORTENER_DOMAIN.lower() in domain
 
 # ================= ROUTES =================
 
@@ -169,7 +90,8 @@ async def create_secure_session(request: Request, link_id: str) -> dict:
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
     if api != ADMIN_API_KEY: return JSONResponse({"status":"error"}, 403)
     rid = secrets.token_urlsafe(8)
-    token = encrypt_token({"i": rid, "t": int(time.time())})
+    # Token is encrypted with short expiry data
+    token = encrypt_token({"i": rid, "t": int(time.time()), "r": secrets.token_hex(4)})
     await links_col.update_one({"random_id": rid}, {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}}, upsert=True)
     
     base = str(request.base_url).rstrip("/")
@@ -187,151 +109,119 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
     return {"status": "success", "shortenedUrl": final}
 
 @app.get("/redirect")
-async def redirect_page(request: Request, token: str = Query(None)):
-    if not token: return HTMLResponse("<h1>Invalid</h1>", 400)
+async def gatekeeper(request: Request, token: str = Query(None)):
+    if not token: return HTMLResponse("Blocked", 403)
     data = decrypt_token(token)
-    if not data: return HTMLResponse("<h1>Secure Link Only</h1>", 403)
+    if not data: return HTMLResponse("Access Denied", 403)
     
-    link = await links_col.find_one({"random_id": data.get("i")})
-    if not link: return HTMLResponse("<h1>Expired</h1>", 404)
-    
-    # SESSION CREATION (Optimized)
-    session = await create_secure_session(request, data.get("i"))
-    
-    # HTML Response - OPTIMIZED FOR SPEED
-    return HTMLResponse(f"""
+    # 1. STRICT REFERER CHECK (This stops bypassed links from Telegram)
+    referer = request.headers.get("referer", "")
+    if not is_valid_referer(referer):
+        return HTMLResponse(f"""
+        <body style="background:#0a0a0a;color:#ff4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;">
+            <div>
+                <h1 style="font-size:3rem;">⛔ Access Denied</h1>
+                <p style="color:#666;">Bypass detected. Direct link access is strictly prohibited.</p>
+                <p style="color:#444;font-size:0.8rem;">You must go through <b>{SHORTENER_DOMAIN}</b> ads to get the original link.</p>
+                <p style="color:#333;margin-top:2rem;"><i>Reason: Referer Missing/Invalid</i></p>
+            </div>
+        </body>
+        """, status_code=403)
+
+    # 2. BOT UA CHECK
+    ua = request.headers.get("User-Agent", "").lower()
+    if any(b in ua for b in ["bot", "python", "curl", "wget", "telegram", "cloud"]):
+        return HTMLResponse("<h1>Bot Blocked</h1>", status_code=403)
+
+    # 3. Create Session
+    session_id = secrets.token_hex(32)
+    csrf = secrets.token_urlsafe(16)
+    n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
+    ans = str(n1 * n2)
+
+    await sessions_col.insert_one({
+        "session_id": session_id,
+        "link_id": data["i"],
+        "ip": get_client_ip(request),
+        "ans": ans,
+        "csrf": csrf,
+        "created_at": time.time(),
+        "used": False
+    })
+
+    resp = HTMLResponse(f"""
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Verifying...</title>
+        <meta charset="UTF-8"><title>Verifying...</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1">
         <style>
-            body {{ background: #0b0e14; color: #fff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
-            .card {{ background: #151921; border: 1px solid #242933; padding: 2rem; border-radius: 12px; text-align: center; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }}
-            .spin {{ width: 32px; height: 32px; border: 3px solid #3d4451; border-top-color: #3b82f6; border-radius: 50%; animation: s 0.6s linear infinite; margin: 1rem auto; }}
-            @keyframes s {{ to {{ transform: rotate(360deg); }} }}
-            .btn {{ display: none; background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; width: 100%; font-size: 15px; margin-top: 15px; }}
-            .btn:hover {{ background: #2563eb; }}
-            .status {{ color: #94a3b8; font-size: 13px; }}
-            #hp {{ position: absolute; opacity: 0; height: 0; width: 0; z-index: -1; }}
+            body {{ background:#050505; color:white; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }}
+            .box {{ background:#111; border:1px solid #222; padding:2.5rem; border-radius:15px; text-align:center; width:280px; box-shadow:0 15px 35px rgba(0,0,0,0.5); }}
+            .loader {{ border:3px solid #222; border-top:3px solid #007bff; border-radius:50%; width:35px; height:35px; animation:spin 0.8s linear infinite; margin:1rem auto; }}
+            @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+            .btn {{ display:none; background:#007bff; color:white; border:0; padding:12px; border-radius:8px; font-weight:700; cursor:pointer; width:100%; font-size:1rem; }}
         </style>
     </head>
     <body>
-        <div class="card">
-            <h2 id="t">Verifying Gateway</h2>
-            <div id="l" class="spin"></div>
-            <p id="s" class="status">Initial security check...</p>
-            <input type="text" id="hp" name="hp_field" tabindex="-1" autocomplete="off">
-            <button id="b" class="btn" onclick="v()">Verify & Continue</button>
+        <div class="box">
+            <h2 style="margin:0 0 1rem 0;">Security Shield</h2>
+            <div id="l" class="loader"></div>
+            <p id="s" style="color:#666;font-size:0.8rem;">Checking headers...</p>
+            <button id="b" class="btn" onclick="v()">Get My Link</button>
         </div>
         <script>
-            const S = {{ sid: "{session['sid']}", csrf: "{session['csrf']}", token: "{token}" }};
-            
-            // Background pre-check and bot detection
-            (function() {{
-                const detect = () => {{
-                    if (navigator.webdriver) return true;
-                    if (!navigator.languages || navigator.languages.length === 0) return true;
-                    if (window.outerWidth === 0 && window.outerHeight === 0) return true;
-                    return false;
-                }};
-                window._isBot = detect();
-            }})();
-
-            // FAST SHOW (Remove artificial delay)
-            setTimeout(() => {{
-                document.getElementById('l').style.display = 'none';
-                document.getElementById('b').style.display = 'block';
-                document.getElementById('s').innerText = "Security check completed.";
-            }}, 300);
+            setTimeout(() => {{ 
+                document.getElementById('l').style.display='none';
+                document.getElementById('b').style.display='block';
+                document.getElementById('s').innerText='Security check complete.';
+            }}, 500);
 
             async function v() {{
                 const btn = document.getElementById('b');
-                const t = document.getElementById('t');
-                const s = document.getElementById('s');
-                const hp = document.getElementById('hp').value;
-
-                btn.disabled = true;
-                btn.innerText = "Processing...";
-                
-                // Solve JS Challenge
-                const ans = eval("{session['expr']}");
-                
-                try {{
-                    const r = await fetch('/verify', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json', 'X-CSRF': S.csrf }},
-                        body: JSON.stringify({{ 
-                            sid: S.sid, 
-                            ans: ans.toString(), 
-                            bot: window._isBot,
-                            hp: hp // Honeypot Field
-                        }})
-                    }});
-                    
-                    const d = await r.json();
-                    if(d.success) {{
-                        t.innerText = "Success!";
-                        s.innerText = "Redirecting now...";
-                        window.location.href = d.url;
-                    }} else {{
-                        t.innerText = "Access Denied";
-                        s.innerText = d.message;
-                        s.style.color = "#ef4444";
-                        btn.style.display = 'none';
-                    }}
-                }} catch(e) {{
-                    s.innerText = "Network Error. Please refresh.";
-                    btn.disabled = false;
-                    btn.innerText = "Try Again";
-                }}
+                btn.disabled = true; btn.innerText = "Redirecting...";
+                const res = await fetch('/verify', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json', 'X-CSRF': "{csrf}" }},
+                    body: JSON.stringify({{ sid: "{session_id}", ans: ({n1}*{n2}).toString() }})
+                }});
+                const d = await res.json();
+                if(d.success) window.location.href = d.url;
+                else {{ alert(d.message); location.reload(); }}
             }}
         </script>
     </body>
     </html>
     """)
+    resp.set_cookie(key="gate_pass", value=session_id, httponly=True)
+    return resp
 
 @app.post("/verify")
-async def verify_request(request: Request):
+async def verify(request: Request, gate_pass: str = Cookie(None)):
     try:
         body = await request.json()
         sid, ans = body.get("sid"), body.get("ans")
-        is_bot_client = body.get("bot", False)
-        hp_val = body.get("hp", "")
         csrf = request.headers.get("X-CSRF")
         
-        # 1. Fetch & Check Session
+        if not gate_pass or gate_pass != sid: return JSONResponse({"success":False, "message": "Verification Expired"}, 403)
+        
         session = await sessions_col.find_one({"session_id": sid, "used": False})
-        if not session: return JSONResponse({"success":False, "message": "Session Inactive"}, 403)
+        if not session: return JSONResponse({"success":False, "message": "Session Not Found"}, 403)
         
-        # 2. ULTRA BYPASS DETECTION
-        if session.get("is_bypassed"):
-            return JSONResponse({"success":False, "message": "Direct/Suspicious access blocked."}, 403)
+        # IP Lock
+        if session["ip"] != get_client_ip(request): return JSONResponse({"success":False, "message": "Network Changed"}, 403)
         
-        # 3. Honeypot check (Bots fill hidden fields)
-        if hp_val: return JSONResponse({"success":False, "message": "Automation detected (HP)."}, 403)
+        # Challenge Checks
+        if not hmac.compare_digest(session["csrf"], csrf or ""): return JSONResponse({"success":False, "message": "Security Error"}, 403)
+        if not hmac.compare_digest(session["ans"], ans or ""): return JSONResponse({"success":False, "message": "Challenge Error"}, 403)
 
-        # 4. Fingerprint checks
-        if is_bot_client: return JSONResponse({"success":False, "message": "Bot profile detected."}, 403)
-        
-        # IP consistency check
-        if session["ip"] != get_client_ip(request):
-            return JSONResponse({"success":False, "message": "Proxy rotation detected."}, 403)
-
-        # 5. Crypto/CSRF checks
-        if not hmac.compare_digest(session["csrf"], csrf or ""): return JSONResponse({"success":False, "message": "CSRF Error"}, 403)
-        if not hmac.compare_digest(session["ans"], ans or ""): return JSONResponse({"success":False, "message": "Logic Error"}, 403)
-
-        # 6. Mark used and release URL
+        # Success Handler
         await sessions_col.update_one({"session_id": sid}, {"$set": {"used": True}})
         link = await links_col.find_one({"random_id": session["link_id"]})
-        if not link: return JSONResponse({"success":False, "message": "Link Expired"}, 404)
         
         await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
         return {"success": True, "url": link["original_url"]}
-        
-    except: return JSONResponse({"success":False, "message": "Server Error"}, 500)
+    except: return JSONResponse({"success":False, "message": "System Error"}, 500)
 
 @app.get("/stats")
 async def stats(api: str = Query(None)):
@@ -341,8 +231,8 @@ async def stats(api: str = Query(None)):
     return {"total_links": c_links, "active_sessions": c_sess}
 
 @app.on_event("startup")
-async def on_start():
+async def startup():
     await init_db()
-    # Cleanup on restart
+    # Always clear sessions on startup to prevent bloat
     await sessions_col.delete_many({})
-    print("ULTRA SPEED & SECURITY ONLINE")
+    print("IRON GATE v10.0 (STRICT REFERER) ONLINE")
