@@ -106,20 +106,23 @@ async def redirect_page(request: Request, token: str = Query(None)):
         "is_valid": has_valid_referer
     })
     
-    session_id = secrets.token_hex(24)
-    csrf = secrets.token_urlsafe(16)
-    n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
-    
-    await sessions_col.insert_one({
-        "sid": session_id,
-        "link_id": data["i"],
-        "ip": get_ip(request),
-        "csrf": csrf,
-        "ans": str(n1*n2),
-        "valid_referer": has_valid_referer,
-        "created_at": time.time(),
-        "used": False
-    })
+    try:
+        session_id = secrets.token_hex(24)
+        csrf = secrets.token_urlsafe(16)
+        n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
+        
+        await sessions_col.insert_one({
+            "session_id": session_id,
+            "link_id": data["i"],
+            "ip": get_ip(request),
+            "csrf": csrf,
+            "ans": str(n1*n2),
+            "valid_referer": has_valid_referer,
+            "created_at": time.time(),
+            "used": False
+        })
+    except Exception as e:
+        return HTMLResponse(f"Error: {str(e)}", 500)
 
     return HTMLResponse(f"""
 <!DOCTYPE html>
@@ -193,7 +196,7 @@ async def verify(request: Request, v_init: str = Cookie(None)):
             await log_request(request, "VERIFY_FAIL", {"reason": "Cookie missing or mismatch"})
             return JSONResponse({"success": False, "message": "Browser verification failed."}, 403)
         
-        session = await sessions_col.find_one({"sid": sid, "used": False})
+        session = await sessions_col.find_one({"session_id": sid, "used": False})
         if not session:
             await log_request(request, "VERIFY_FAIL", {"reason": "Session not found"})
             return JSONResponse({"success": False, "message": "Session expired"}, 403)
@@ -211,7 +214,7 @@ async def verify(request: Request, v_init: str = Cookie(None)):
         if not hmac.compare_digest(session["ans"], ans or ""):
             return JSONResponse({"success": False, "message": "Verification failed"}, 403)
         
-        await sessions_col.update_one({"sid": sid}, {"$set": {"used": True}})
+        await sessions_col.update_one({"session_id": sid}, {"$set": {"used": True}})
         link = await links_col.find_one({"random_id": session["link_id"]})
         await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
         
@@ -256,4 +259,3 @@ async def start():
     await logs_col.delete_many({})
     asyncio.create_task(auto_cleanup_task())
     print("SERVER ONLINE")
-
