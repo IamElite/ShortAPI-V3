@@ -76,8 +76,9 @@ async def init_db():
         await DB['links'].create_index("created_at", expireAfterSeconds=LINK_EXPIRY)
         await DB['sessions'].create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
         await DB['logs'].create_index("created_at", expireAfterSeconds=3600)
-        await get_or_create_secret_key()
-    except: pass
+    except Exception as e:
+        print(f"[INDEX] Error: {e}")
+    await get_or_create_secret_key()
 
 app = FastAPI(on_startup=[init_db])
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
