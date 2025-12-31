@@ -1,29 +1,82 @@
-import os, time, secrets, json, base64, hashlib, hmac, urllib.request, asyncio
+import random, os, time, secrets, json, base64, hashlib, hmac, urllib.request, asyncio
 from urllib.parse import quote, urlparse
 from fastapi import FastAPI, Request, Query, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://hnyx:wywyw2@cluster0.9dxlslv.mongodb.net/?retryWrites=true&w=majority")
+MONGO_URI_1 = os.getenv("MONGO_URI_1", "mongodb+srv://hnyx:wywyw2@cluster0.9dxlslv.mongodb.net/?retryWrites=true&w=majority")
+MONGO_URI_2 = os.getenv("MONGO_URI_2", "mongodb+srv://public:abishnoimf@cluster0.rqk6ihd.mongodb.net/?retryWrites=true&w=majority")
+MONGO_URI_3 = os.getenv("MONGO_URI_3", "mongodb+srv://ravi:ravi12345@cluster0.hndinhj.mongodb.net/?retryWrites=true&w=majority")
+
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
-SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
-SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
-SECRET_KEY = os.getenv("SECRET_KEY", "DebugMode2025!@#")
+
+SHORT_BASE_1 = os.getenv("SHORT_BASE_1", "nanolinks.in")
+SHORT_API_1 = os.getenv("SHORT_API_1", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
+
+SHORT_BASE_2 = os.getenv("SHORT_BASE_2", "")
+SHORT_API_2 = os.getenv("SHORT_API_2", "")
+
+SHORT_BASE_3 = os.getenv("SHORT_BASE_3", "")
+SHORT_API_3 = os.getenv("SHORT_API_3", "")
+
+SHORT_BASE_4 = os.getenv("SHORT_BASE_4", "")
+SHORT_API_4 = os.getenv("SHORT_API_4", "")
+
+SHORT_BASE_5 = os.getenv("SHORT_BASE_5", "")
+SHORT_API_5 = os.getenv("SHORT_API_5", "")
+
+def get_random_shortener():
+    providers = [(SHORT_BASE_1, SHORT_API_1), (SHORT_BASE_2, SHORT_API_2), (SHORT_BASE_3, SHORT_API_3), (SHORT_BASE_4, SHORT_API_4), (SHORT_BASE_5, SHORT_API_5)]
+    active = [(d, a) for d, a in providers if d and a]
+    return random.choice(active) if active else (None, None)
+
+TOKEN_EXPIRY_SECONDS = 120
 LINK_EXPIRY = 3 * 24 * 60 * 60
 SESSION_EXPIRY = 300
 
-client = AsyncIOMotorClient(MONGO_URI)
-db = client["shortener_db"]
-links_col = db["links"]
-sessions_col = db["sessions"]
-logs_col = db["access_logs"]
+DB = {}
+
+def init_mongo():
+    uris = [u for u in [MONGO_URI_1, MONGO_URI_2, MONGO_URI_3] if u]
+    for uri in uris:
+        try:
+            DB['client'] = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
+            DB['db'] = DB['client']["shortener_db"]
+            DB['links'] = DB['db']["links"]
+            DB['sessions'] = DB['db']["sessions"]
+            DB['logs'] = DB['db']["access_logs"]
+            DB['config'] = DB['db']["config"]
+            print(f"[MONGO] Connected: {uri[:40]}...")
+            return True
+        except:
+            continue
+    return False
+
+init_mongo()
+
+SECRET_KEY = None
+
+async def get_or_create_secret_key():
+    global SECRET_KEY
+    config = await DB['config'].find_one({"key": "secret_key"})
+    if config:
+        SECRET_KEY = config["value"]
+    else:
+        SECRET_KEY = secrets.token_hex(32)
+        await DB['config'].insert_one({"key": "secret_key", "value": SECRET_KEY, "created_at": time.time()})
+        await DB['sessions'].delete_many({})
+        await DB['links'].delete_many({})
+        await DB['logs'].delete_many({})
+        print("[NEW KEY] Generated new SECRET_KEY, cleared old data")
+    return SECRET_KEY
 
 async def init_db():
     try:
-        await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY)
-        await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
-        await logs_col.create_index("created_at", expireAfterSeconds=3600)
+        await DB['links'].create_index("created_at", expireAfterSeconds=LINK_EXPIRY)
+        await DB['sessions'].create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
+        await DB['logs'].create_index("created_at", expireAfterSeconds=3600)
+        await get_or_create_secret_key()
     except: pass
 
 app = FastAPI(on_startup=[init_db])
@@ -59,28 +112,27 @@ async def log_request(req: Request, event: str, details: dict = {}):
         "ip": get_ip(req),
         "referer": req.headers.get("referer", "EMPTY"),
         "user_agent": req.headers.get("user-agent", "EMPTY")[:200],
-        "all_headers": dict(req.headers),
         "created_at": time.time(),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         **details
     }
-    await logs_col.insert_one(log_entry)
-    print(f"[LOG] {event} | IP: {log_entry['ip']} | Referer: {log_entry['referer'][:50]}")
+    await DB['logs'].insert_one(log_entry)
 
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
     if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
     rid = secrets.token_urlsafe(8)
     token = encrypt_token({"i": rid, "t": int(time.time())})
-    await links_col.update_one({"random_id": rid}, {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}}, upsert=True)
+    await DB['links'].update_one({"random_id": rid}, {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}}, upsert=True)
     
     base = str(request.base_url).rstrip("/").replace("http://", "https://") if "localhost" not in str(request.base_url) else str(request.base_url).rstrip("/")
     red_url = f"{base}/redirect?token={token}"
     
     final = red_url
-    if SHORTENER_API:
+    shortener_domain, shortener_api = get_random_shortener()
+    if shortener_domain and shortener_api:
         try:
-            with urllib.request.urlopen(f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(red_url)}", timeout=5) as r:
+            with urllib.request.urlopen(f"https://{shortener_domain}/api?api={shortener_api}&url={quote(red_url)}", timeout=5) as r:
                 d = json.loads(r.read().decode())
                 if d.get("status") == "success": final = d.get("shortenedUrl")
         except: pass
@@ -91,27 +143,29 @@ async def redirect_page(request: Request, token: str = Query(None)):
     if not token: return HTMLResponse("Blocked", 403)
     
     await log_request(request, "REDIRECT_PAGE_HIT", {"token": token[:20]})
-    data = decrypt_token(token)
-    if not data: return HTMLResponse("Invalid", 403)
     
-    link = await links_col.find_one({"random_id": data.get("i")})
-    if not link: return HTMLResponse("Expired", 404)
+    data = decrypt_token(token)
+    if not data: return HTMLResponse("Invalid Token", 403)
+    
+    token_time = data.get("t", 0)
+    if time.time() - token_time > TOKEN_EXPIRY_SECONDS:
+        await log_request(request, "TOKEN_EXPIRED", {"age": int(time.time() - token_time)})
+        return HTMLResponse("Link Expired. Please get a new link.", 403)
+    
+    link = await DB['links'].find_one({"random_id": data.get("i")})
+    if not link: return HTMLResponse("Link Not Found", 404)
 
     referer = request.headers.get("referer", "")
     has_valid_referer = len(referer.strip()) > 0
     
-    await log_request(request, "REFERER_CHECK", {
-        "referer_value": referer,
-        "shortener_domain": SHORTENER_DOMAIN,
-        "is_valid": has_valid_referer
-    })
+    await log_request(request, "REFERER_CHECK", {"referer_value": referer[:50], "is_valid": has_valid_referer})
     
     try:
         session_id = secrets.token_hex(24)
         csrf = secrets.token_urlsafe(16)
         n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
         
-        await sessions_col.insert_one({
+        await DB['sessions'].insert_one({
             "session_id": session_id,
             "link_id": data["i"],
             "ip": get_ip(request),
@@ -141,18 +195,38 @@ async def redirect_page(request: Request, token: str = Query(None)):
 <body>
     <div class="box">
         <h2>🔐 Security Check</h2>
-        <p style="color:#888;font-size:0.9rem">Complete verification to continue</p>
+        <p style="color:#888;font-size:0.9rem">Click to continue</p>
         <button id="btn" class="btn" disabled>Loading...</button>
-        <p id="msg">Initializing...</p>
+        <p id="msg">Verifying browser...</p>
     </div>
     <script>
         const S = {{ sid: "{session_id}", csrf: "{csrf}", n1: {n1}, n2: {n2} }};
+        let fingerprint = null;
+
+        function getFingerprint() {{
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.fillText('fp', 2, 2);
+            const canvasHash = canvas.toDataURL().slice(-50);
+            
+            const gl = canvas.getContext('webgl');
+            let webglHash = 'none';
+            if(gl) {{
+                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                if(debugInfo) webglHash = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'x';
+            }}
+            
+            return btoa(canvasHash + '|' + webglHash + '|' + navigator.hardwareConcurrency + '|' + screen.width);
+        }}
 
         setTimeout(() => {{
+            fingerprint = getFingerprint();
             document.cookie = "v_init=" + S.sid + ";path=/;max-age=300;SameSite=Lax";
             document.getElementById('btn').disabled = false;
             document.getElementById('btn').innerText = "Get Link";
-            document.getElementById('msg').innerText = "Click to proceed";
+            document.getElementById('msg').innerText = "Click to get your link";
         }}, 1000);
 
         document.getElementById('btn').onclick = async () => {{
@@ -165,7 +239,11 @@ async def redirect_page(request: Request, token: str = Query(None)):
                 const res = await fetch('/verify', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json', 'X-CSRF': S.csrf }},
-                    body: JSON.stringify({{ sid: S.sid, ans: ans.toString() }})
+                    body: JSON.stringify({{ 
+                        sid: S.sid, 
+                        ans: ans.toString(),
+                        fp: fingerprint
+                    }})
                 }});
                 const d = await res.json();
                 if(d.success) {{
@@ -188,21 +266,26 @@ async def verify(request: Request, v_init: str = Cookie(None)):
     try:
         body = await request.json()
         sid, ans = body.get("sid"), body.get("ans")
+        fingerprint = body.get("fp")
         csrf = request.headers.get("X-CSRF")
         
-        await log_request(request, "VERIFY_ATTEMPT", {"sid": sid[:20] if sid else "NONE", "cookie_present": bool(v_init)})
+        await log_request(request, "VERIFY_ATTEMPT", {"sid": sid[:20] if sid else "NONE", "has_fp": bool(fingerprint)})
         
         if not v_init or v_init != sid:
-            await log_request(request, "VERIFY_FAIL", {"reason": "Cookie missing or mismatch"})
+            await log_request(request, "VERIFY_FAIL", {"reason": "Cookie mismatch"})
             return JSONResponse({"success": False, "message": "Browser verification failed."}, 403)
         
-        session = await sessions_col.find_one({"session_id": sid, "used": False})
+        if not fingerprint or len(fingerprint) < 20:
+            await log_request(request, "VERIFY_FAIL", {"reason": "Invalid fingerprint"})
+            return JSONResponse({"success": False, "message": "Browser fingerprint invalid."}, 403)
+        
+        session = await DB['sessions'].find_one({"session_id": sid, "used": False})
         if not session:
             await log_request(request, "VERIFY_FAIL", {"reason": "Session not found"})
             return JSONResponse({"success": False, "message": "Session expired"}, 403)
         
         if not session.get("valid_referer"):
-            await log_request(request, "VERIFY_FAIL", {"reason": "Invalid referer at session creation"})
+            await log_request(request, "VERIFY_FAIL", {"reason": "Invalid referer"})
             return JSONResponse({"success": False, "message": "Direct access blocked. Use shortener link."}, 403)
         
         if session["ip"] != get_ip(request):
@@ -214,9 +297,9 @@ async def verify(request: Request, v_init: str = Cookie(None)):
         if not hmac.compare_digest(session["ans"], ans or ""):
             return JSONResponse({"success": False, "message": "Verification failed"}, 403)
         
-        await sessions_col.update_one({"session_id": sid}, {"$set": {"used": True}})
-        link = await links_col.find_one({"random_id": session["link_id"]})
-        await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
+        await DB['sessions'].update_one({"session_id": sid}, {"$set": {"used": True}})
+        link = await DB['links'].find_one({"random_id": session["link_id"]})
+        await DB['links'].update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
         
         await log_request(request, "VERIFY_SUCCESS", {"link_id": session["link_id"]})
         
@@ -229,17 +312,16 @@ async def verify(request: Request, v_init: str = Cookie(None)):
 @app.get("/logs")
 async def view_logs(api: str = Query(None), limit: int = Query(50)):
     if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
-    logs = await logs_col.find().sort("created_at", -1).limit(limit).to_list(limit)
+    logs = await DB['logs'].find().sort("created_at", -1).limit(limit).to_list(limit)
     for log in logs:
         log["_id"] = str(log["_id"])
-        if "all_headers" in log: del log["all_headers"]
     return {"total": len(logs), "logs": logs}
 
 @app.get("/cleanup")
 async def cleanup_db(api: str = Query(None)):
     if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
-    logs_deleted = await logs_col.delete_many({})
-    sessions_deleted = await sessions_col.delete_many({})
+    logs_deleted = await DB['logs'].delete_many({})
+    sessions_deleted = await DB['sessions'].delete_many({})
     return {"status": "success", "logs_deleted": logs_deleted.deleted_count, "sessions_deleted": sessions_deleted.deleted_count}
 
 async def auto_cleanup_task():
@@ -247,15 +329,14 @@ async def auto_cleanup_task():
         await asyncio.sleep(600)
         try:
             cutoff = time.time() - 1800
-            await logs_col.delete_many({"created_at": {"$lt": cutoff}})
-            await sessions_col.delete_many({"used": True})
-            print(f"[AUTO-CLEANUP] Ran at {time.strftime('%H:%M:%S')}")
+            await DB['logs'].delete_many({"created_at": {"$lt": cutoff}})
+            await DB['sessions'].delete_many({"used": True})
         except: pass
 
 @app.on_event("startup")
 async def start():
     await init_db()
-    await sessions_col.delete_many({})
-    await logs_col.delete_many({})
+    await DB['sessions'].delete_many({})
+    await DB['logs'].delete_many({})
     asyncio.create_task(auto_cleanup_task())
     print("SERVER ONLINE")
