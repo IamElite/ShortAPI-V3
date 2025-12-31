@@ -116,9 +116,9 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
             "bypassed_count": 0
         })
     
-    # 4. Build redirect URL (using /s/ format)
+    # 4. Build redirect URL
     base_url = get_base_url(request)
-    redirect_url = f"{base_url}/s/{token}"
+    redirect_url = f"{base_url}/redirect?token={token}"
     
     # 5. Shorten via external shortener
     final_url = redirect_url
@@ -142,9 +142,8 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
 
 # ================= REDIRECT ENDPOINT (User) =================
 
-@app.get("/s/{token}")
 @app.get("/redirect")
-async def redirect_page(request: Request, token: str = None):
+async def redirect_page(request: Request, token: str = Query(None)):
     """
     Redirect page with bypass detection
     
@@ -194,18 +193,18 @@ async def redirect_page(request: Request, token: str = None):
             {"$inc": {"clicks": 1}}
         )
     
-    # 4. If bypassed - show warning page, else redirect
+    # 4. If bypassed - show warning page (NO ACCESS TO ORIGINAL URL)
     if bypassed:
         return HTMLResponse(f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>⚠️ Bypass Detected</title>
+            <title>⛔ Access Denied</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
                 body {{
                     font-family: 'Segoe UI', Arial, sans-serif;
-                    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+                    background: linear-gradient(135deg, #2c3e50 0%, #1a1a2e 100%);
                     min-height: 100vh;
                     margin: 0;
                     display: flex;
@@ -217,33 +216,33 @@ async def redirect_page(request: Request, token: str = None):
                     padding: 40px;
                     border-radius: 20px;
                     text-align: center;
-                    max-width: 400px;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    max-width: 420px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
                 }}
                 h1 {{ color: #e74c3c; margin-bottom: 10px; }}
-                p {{ color: #666; line-height: 1.6; }}
-                .warning {{ font-size: 60px; margin-bottom: 20px; }}
-                .btn {{
-                    display: inline-block;
-                    margin-top: 20px;
-                    padding: 15px 30px;
-                    background: #e74c3c;
-                    color: white;
-                    text-decoration: none;
+                p {{ color: #555; line-height: 1.7; }}
+                .icon {{ font-size: 70px; margin-bottom: 20px; }}
+                .warning-box {{
+                    background: #fff3cd;
+                    border: 1px solid #ffc107;
                     border-radius: 10px;
-                    font-weight: bold;
+                    padding: 15px;
+                    margin: 20px 0;
+                    color: #856404;
                 }}
-                .btn:hover {{ background: #c0392b; }}
-                .small {{ font-size: 12px; color: #999; margin-top: 20px; }}
+                .info {{ font-size: 13px; color: #888; margin-top: 25px; }}
             </style>
         </head>
         <body>
             <div class="container">
-                <div class="warning">⚠️</div>
+                <div class="icon">⛔</div>
                 <h1>Bypass Detected!</h1>
-                <p>You tried to skip the advertisement. Please use the original short link to support us.</p>
-                <p class="small">Reason: {reason}</p>
-                <a href="{original_url}" class="btn">Continue Anyway →</a>
+                <p>You tried to skip the advertisement using bypass tools.</p>
+                <div class="warning-box">
+                    <strong>⚠️ Access Denied</strong><br>
+                    Please use the original short link properly to get access.
+                </div>
+                <p class="info">If you believe this is a mistake, please try again using the original link.</p>
             </div>
         </body>
         </html>
