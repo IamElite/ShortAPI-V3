@@ -116,9 +116,9 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
             "bypassed_count": 0
         })
     
-    # 4. Build redirect URL
+    # 4. Build redirect URL (using /s/ format)
     base_url = get_base_url(request)
-    redirect_url = f"{base_url}/redirect?token={token}"
+    redirect_url = f"{base_url}/s/{token}"
     
     # 5. Shorten via external shortener
     final_url = redirect_url
@@ -142,8 +142,9 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
 
 # ================= REDIRECT ENDPOINT (User) =================
 
+@app.get("/s/{token}")
 @app.get("/redirect")
-async def redirect_page(request: Request, token: str = Query(None)):
+async def redirect_page(request: Request, token: str = None):
     """
     Redirect page with bypass detection
     
