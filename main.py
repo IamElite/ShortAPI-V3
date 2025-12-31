@@ -1,6 +1,6 @@
 # ===============================================
-# Shortener API with Multi-Layer Security
-# CSRF + Session + IP + Timestamp + Obfuscation
+# Shortener API with Multi-Layer Reinforced Security
+# 5s Wait + JS Challenge + CSRF + Fingerprinting
 # ===============================================
 
 import os
@@ -25,13 +25,12 @@ SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a9653
 
 # Secret keys - KEEP PRIVATE!
 SECRET_KEY = os.getenv("SECRET_KEY", "MyUltraSecretKey2024XYZ!@#$%^&*")
-CSRF_SECRET = os.getenv("CSRF_SECRET", "CsrfSecretKey2024!@#")
-SESSION_SECRET = os.getenv("SESSION_SECRET", "SessionSecretKey2024!@#")
+CHALLENGE_SECRET = os.getenv("CHALLENGE_SECRET", "ChallengeSecretKey2024!@#")
 
 # Timing settings
 LINK_EXPIRY_SECONDS = 30 * 24 * 60 * 60  # 30 days
-SESSION_EXPIRY = 300  # 5 minutes
-TIMESTAMP_WINDOW = 120  # 2 minutes tolerance
+SESSION_EXPIRY = 600  # 10 minutes
+MIN_WAIT_SECONDS = 5  # MUST WAIT AT LEAST 5 SECONDS (Anti-Bypass)
 
 # ================= DATABASE SETUP =================
 client = AsyncIOMotorClient(MONGO_URI)
@@ -40,10 +39,12 @@ links_col = db["links"]
 sessions_col = db["sessions"]
 
 async def init_db():
-    """Create indexes"""
+    """Create indexes for performance and auto-cleanup"""
     try:
         await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY_SECONDS)
         await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
+        await links_col.create_index("random_id", unique=True)
+        await sessions_col.create_index("session_id", unique=True)
     except:
         pass
 
@@ -56,553 +57,279 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================= SECURITY FUNCTIONS =================
+# ================= ENCRYPTION & SECURITY HELPERS =================
 
 def _get_key(salt: str = "") -> bytes:
-    """Generate key from secret + salt"""
     return hashlib.sha256((SECRET_KEY + salt).encode()).digest()
 
-def _xor_encrypt(data: bytes, key: bytes) -> bytes:
-    """XOR encryption"""
+def _xor_cipher(data: bytes, key: bytes) -> bytes:
     return bytes([data[i] ^ key[i % len(key)] for i in range(len(data))])
 
 def encrypt_token(data: dict) -> str:
-    """Encrypt data into URL-safe token"""
     try:
         key = _get_key("token")
         json_data = json.dumps(data, separators=(',', ':'))
-        encrypted = _xor_encrypt(json_data.encode(), key)
+        encrypted = _xor_cipher(json_data.encode(), key)
         b64_data = base64.urlsafe_b64encode(encrypted).decode().rstrip('=')
         signature = hmac.new(key, b64_data.encode(), hashlib.sha256).hexdigest()[:16]
         return f"{b64_data}.{signature}"
-    except:
-        return None
+    except: return None
 
 def decrypt_token(token: str) -> dict:
-    """Decrypt token, returns None if invalid"""
     try:
-        if '.' not in token:
-            return None
         b64_data, signature = token.rsplit('.', 1)
         key = _get_key("token")
-        expected_sig = hmac.new(key, b64_data.encode(), hashlib.sha256).hexdigest()[:16]
-        if not hmac.compare_digest(signature, expected_sig):
+        if not hmac.compare_digest(signature, hmac.new(key, b64_data.encode(), hashlib.sha256).hexdigest()[:16]):
             return None
         padding = 4 - len(b64_data) % 4
-        if padding != 4:
-            b64_data += '=' * padding
-        encrypted = base64.urlsafe_b64decode(b64_data)
-        decrypted = _xor_encrypt(encrypted, key)
+        if padding != 4: b64_data += '=' * padding
+        decrypted = _xor_cipher(base64.urlsafe_b64decode(b64_data), key)
         return json.loads(decrypted.decode())
-    except:
-        return None
+    except: return None
 
-# ================= CSRF TOKEN =================
+# ================= CHALLENGE LOGIC =================
 
-def generate_csrf_token(session_id: str, timestamp: int) -> str:
-    """Generate CSRF token tied to session and time"""
-    data = f"{session_id}:{timestamp}:{CSRF_SECRET}"
-    return hashlib.sha256(data.encode()).hexdigest()[:32]
+def generate_challenge(session_id: str) -> tuple[str, str]:
+    """Generates a dynamic math challenge that JS must solve"""
+    n1 = secrets.randbelow(100) + 1
+    n2 = secrets.randbelow(100) + 1
+    # Simple challenge: (n1 * n2) + hash(session_id + secret)
+    salt = hashlib.md5(f"{session_id}:{CHALLENGE_SECRET}".encode()).hexdigest()[:8]
+    # We send the expression and require the result
+    challenge_expr = f"({n1} * {n2}) + parseInt('{salt}', 16)"
+    expected_result = (n1 * n2) + int(salt, 16)
+    return challenge_expr, str(expected_result)
 
-def verify_csrf_token(csrf_token: str, session_id: str, timestamp: int) -> bool:
-    """Verify CSRF token"""
-    expected = generate_csrf_token(session_id, timestamp)
-    return hmac.compare_digest(csrf_token, expected)
+# ================= SESSION MANAGEMENT =================
 
-# ================= SESSION =================
-
-async def create_session(ip: str, user_agent: str) -> dict:
-    """Create new session with all security data"""
-    session_id = secrets.token_hex(32)
-    timestamp = int(time.time())
-    csrf_token = generate_csrf_token(session_id, timestamp)
-    obfuscation = secrets.token_urlsafe(8)
+async def create_secure_session(request: Request, link_id: str) -> dict:
+    session_id = secrets.token_hex(24)
+    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    ua = request.headers.get("User-Agent", "")[:250]
     
-    # Safety identifier (hash of IP + UA + time)
-    safety_hash = hashlib.sha256(f"{ip}:{user_agent}:{timestamp}:{SESSION_SECRET}".encode()).hexdigest()
+    challenge_expr, expected_val = generate_challenge(session_id)
+    csrf_token = secrets.token_urlsafe(32)
     
     session_data = {
         "session_id": session_id,
-        "csrf_token": csrf_token,
-        "timestamp": timestamp,
+        "link_id": link_id,
         "ip": ip,
-        "user_agent": user_agent[:200],
-        "safety_identifier": safety_hash,
-        "obfuscation": obfuscation,
+        "ua": ua,
+        "csrf": csrf_token,
+        "challenge_ans": expected_val,
         "created_at": time.time(),
         "used": False
     }
     
     await sessions_col.insert_one(session_data)
-    
     return {
         "sid": session_id,
         "csrf": csrf_token,
-        "ts": timestamp,
-        "obf": obfuscation,
-        "safety": safety_hash[:16]  # Only show partial for client
-    }
-
-async def validate_session(session_id: str, csrf_token: str, timestamp: int, 
-                           ip: str, user_agent: str, safety: str) -> dict:
-    """Validate session with all security checks"""
-    
-    # 1. Find session
-    session = await sessions_col.find_one({
-        "session_id": session_id,
-        "used": False
-    })
-    
-    if not session:
-        return {"valid": False, "reason": "Session not found or expired"}
-    
-    # 2. Verify CSRF token
-    if not verify_csrf_token(csrf_token, session_id, session["timestamp"]):
-        return {"valid": False, "reason": "Invalid CSRF token"}
-    
-    # 3. Timestamp validation (anti-replay)
-    time_diff = abs(int(time.time()) - timestamp)
-    if time_diff > TIMESTAMP_WINDOW:
-        return {"valid": False, "reason": "Timestamp expired"}
-    
-    # 4. IP validation
-    if session["ip"] != ip:
-        return {"valid": False, "reason": "IP mismatch"}
-    
-    # 5. Safety identifier check
-    expected_safety = session["safety_identifier"][:16]
-    if not hmac.compare_digest(safety, expected_safety):
-        return {"valid": False, "reason": "Safety check failed"}
-    
-    return {"valid": True, "session": session}
-
-def get_base_url(request: Request):
-    """Get base URL with HTTPS"""
-    url = str(request.base_url).rstrip("/")
-    if "localhost" not in url and "127.0.0.1" not in url:
-        url = url.replace("http://", "https://")
-    return url
-
-def get_client_info(request: Request) -> dict:
-    """Extract client info for fingerprinting"""
-    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-    if not ip:
-        ip = request.headers.get("X-Real-IP", "")
-    if not ip:
-        ip = request.client.host if request.client else "unknown"
-    
-    return {
-        "ip": ip,
-        "user_agent": request.headers.get("User-Agent", "")[:200],
-        "country": request.headers.get("CF-IPCountry", "XX")
+        "expr": challenge_expr
     }
 
 # ================= API ENDPOINT (Admin) =================
 
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
-    """Create protected short link"""
-    
     if api != ADMIN_API_KEY:
         return JSONResponse({"status": "error", "message": "Invalid API Key"}, status_code=403)
-    
     if not url:
         return JSONResponse({"status": "error", "message": "URL missing"}, status_code=400)
     
     random_id = secrets.token_urlsafe(8)
+    token = encrypt_token({"i": random_id, "t": int(time.time())})
     
-    # Token contains only the link ID - session handles security
-    token_data = {
-        "i": random_id,              # Link ID
-        "t": int(time.time()),       # Created timestamp
-    }
-    
-    encrypted_token = encrypt_token(token_data)
-    
-    if not encrypted_token:
-        return JSONResponse({"status": "error", "message": "Token generation failed"}, status_code=500)
-    
-    # Save link data in DB
     await links_col.update_one(
         {"random_id": random_id},
-        {"$set": {
-            "random_id": random_id,
-            "original_url": url,
-            "created_at": time.time(),
-            "clicks": 0,
-            "bypassed_count": 0
-        }},
+        {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}},
         upsert=True
     )
     
-    base_url = get_base_url(request)
-    redirect_url = f"{base_url}/redirect?token={encrypted_token}"
+    base_url = str(request.base_url).rstrip("/")
+    if "localhost" not in base_url: base_url = base_url.replace("http://", "https://")
+    redirect_url = f"{base_url}/redirect?token={token}"
     
-    # Shorten via external shortener
     final_url = redirect_url
-    
-    if SHORTENER_API and SHORTENER_DOMAIN:
+    if SHORTENER_API:
         try:
             api_url = f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(redirect_url)}"
             with urllib.request.urlopen(api_url, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
                 if data.get("status") == "success":
                     final_url = data.get("shortenedUrl", redirect_url)
-        except Exception as e:
-            print(f"Shortener error: {e}")
-    
-    return {
-        "status": "success",
-        "shortenedUrl": final_url,
-        "directUrl": redirect_url
-    }
+        except: pass
+        
+    return {"status": "success", "shortenedUrl": final_url, "token": token}
 
-# ================= REDIRECT PAGE (Step 1: Show verification page) =================
+# ================= REDIRECT FLOW =================
 
 @app.get("/redirect")
-async def redirect_page(request: Request, token: str = Query(None)):
-    """
-    Step 1: Show verification page with all security tokens
-    Creates session, CSRF, timestamp, obfuscation - all in background
-    """
-    
-    if not token:
-        return HTMLResponse("<h1>Invalid Link</h1>", status_code=400)
-    
-    # Decrypt token
+async def handle_redirect(request: Request, token: str = Query(None)):
+    if not token: return HTMLResponse("<h1>Invalid Token</h1>", status_code=400)
     data = decrypt_token(token)
+    if not data: return HTMLResponse("<h1>Link Corrupted</h1>", status_code=403)
     
-    if not data:
-        await links_col.update_one(
-            {"random_id": "bypass_attempts"},
-            {"$inc": {"bypassed_count": 1}},
-            upsert=True
-        )
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Access Denied</title>
-        <style>
-            body{font-family:Arial;background:#1a1a2e;color:white;display:flex;
-            align-items:center;justify-content:center;height:100vh;margin:0;}
-            .box{background:#2d2d44;padding:40px;border-radius:15px;text-align:center;}
-            h1{color:#e74c3c;}
-        </style>
-        </head>
-        <body><div class="box">
-            <h1>⛔ Access Denied</h1>
-            <p>Invalid or tampered link.</p>
-        </div></body>
-        </html>
-        """, status_code=403)
+    link = await links_col.find_one({"random_id": data.get("i")})
+    if not link: return HTMLResponse("<h1>Link Expired</h1>", status_code=404)
     
-    random_id = data.get("i")
-    created_at = data.get("t", 0)
+    session = await create_secure_session(request, data.get("i"))
     
-    # Check link expiry
-    if time.time() - created_at > LINK_EXPIRY_SECONDS:
-        return HTMLResponse("<h1>⏰ Link Expired</h1>", status_code=410)
-    
-    # Get link from DB
-    link = await links_col.find_one({"random_id": random_id})
-    if not link:
-        return HTMLResponse("<h1>Link Not Found</h1>", status_code=404)
-    
-    # Create session with all security data
-    client = get_client_info(request)
-    session = await create_session(client["ip"], client["user_agent"])
-    
-    # Store link info in session for step 2
-    await sessions_col.update_one(
-        {"session_id": session["sid"]},
-        {"$set": {"link_id": random_id}}
-    )
-    
-    # Return page with hidden security tokens - JavaScript will submit
     return HTMLResponse(f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>Security Verification</title>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Security Check</title>
         <style>
-            body{{font-family:'Segoe UI',Arial;background:linear-gradient(135deg,#667eea,#764ba2);
-            min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;}}
-            .card{{background:white;padding:40px;border-radius:20px;text-align:center;
-            max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3);}}
-            h1{{color:#333;margin-bottom:10px;}}
-            p{{color:#666;}}
-            .loader{{width:50px;height:50px;border:5px solid #e0e0e0;border-top:5px solid #667eea;
-            border-radius:50%;animation:spin 1s linear infinite;margin:20px auto;}}
-            @keyframes spin{{0%{{transform:rotate(0deg)}}100%{{transform:rotate(360deg)}}}}
-            .status{{font-size:14px;color:#888;margin-top:15px;}}
+            body {{ font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+            .card {{ background: #1e293b; padding: 2.5rem; border-radius: 1.5rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); text-align: center; max-width: 400px; width: 90%; border: 1px solid #334155; }}
+            .shield {{ font-size: 3rem; color: #38bdf8; margin-bottom: 1rem; }}
+            h1 {{ font-size: 1.5rem; margin-bottom: 0.5rem; }}
+            p {{ color: #94a3b8; font-size: 0.9rem; line-height: 1.5; }}
+            .loader {{ width: 2.5rem; height: 2.5rem; border: 4px solid #334155; border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1.5rem auto; }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+            .progress {{ font-size: 0.8rem; color: #38bdf8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }}
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>🔐 Verifying...</h1>
-            <p>Please wait while we verify your access.</p>
+            <div class="shield">🛡️</div>
+            <h1>Bypass Protection</h1>
+            <p>We are verifying your connection. This takes exactly {MIN_WAIT_SECONDS} seconds to prevent automated bypass.</p>
             <div class="loader"></div>
-            <div class="status" id="status">Checking security...</div>
+            <div class="progress" id="status">Starting Security Protocol...</div>
         </div>
-        
+
         <script>
-            // All security data - hidden from user
-            const SEC = {{
+            const CONFIG = {{
                 sid: "{session['sid']}",
                 csrf: "{session['csrf']}",
-                ts: {session['ts']},
-                obf: "{session['obf']}",
-                safety: "{session['safety']}",
-                token: "{token}"
+                token: "{token}",
+                wait: {MIN_WAIT_SECONDS} * 1000
             }};
-            
-            // IP info from client
-            const ipInfo = {{
-                ip: "{client['ip']}",
-                country: "{client['country']}"
-            }};
-            
-            // Send verification after small delay (anti-bot)
-            setTimeout(async () => {{
-                document.getElementById('status').innerText = 'Validating session...';
-                
+
+            async function solveChallenge() {{
                 try {{
-                    const response = await fetch('/verify', {{
+                    // Solving dynamic challenge that bots cannot easily replicate
+                    return eval("{session['expr']}");
+                }} catch(e) {{ return 0; }}
+            }}
+
+            let startTime = Date.now();
+            
+            async function verify() {{
+                const elapsed = Date.now() - startTime;
+                if (elapsed < CONFIG.wait) {{
+                    document.getElementById('status').innerText = "Anti-Bot Delay: Waiting...";
+                    setTimeout(verify, 500);
+                    return;
+                }}
+
+                document.getElementById('status').innerText = "Executing JS Challenge...";
+                const ans = await solveChallenge();
+                
+                // Fingerprinting check
+                const isBot = navigator.webdriver || window.callPhantom || window._phantom || !navigator.userAgent;
+
+                try {{
+                    const res = await fetch('/verify', {{
                         method: 'POST',
-                        headers: {{
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': SEC.csrf,
-                            'X-Session-ID': SEC.sid,
-                            'X-Timestamp': SEC.ts.toString(),
-                            'X-Safety': SEC.safety,
-                            'X-Obfuscation': SEC.obf
-                        }},
+                        headers: {{ 'Content-Type': 'application/json', 'X-CSRF-Token': CONFIG.csrf }},
                         body: JSON.stringify({{
-                            token: SEC.token,
-                            timestamp: Date.now(),
-                            ipInfo: ipInfo
+                            sid: CONFIG.sid,
+                            token: CONFIG.token,
+                            ans: ans.toString(),
+                            bot: isBot
                         }})
                     }});
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {{
-                        document.getElementById('status').innerText = '✅ Verified! Redirecting...';
-                        setTimeout(() => {{
-                            window.location.href = result.destination;
-                        }}, 500);
+                    const data = await res.json();
+                    if (data.success) {{
+                        document.getElementById('status').innerText = "Verified! Redirecting...";
+                        window.location.href = data.url;
                     }} else {{
-                        document.getElementById('status').innerText = '❌ ' + result.message;
+                        document.getElementById('status').innerText = "⛔ Access Denied: " + data.message;
                     }}
-                }} catch (e) {{
-                    document.getElementById('status').innerText = '❌ Verification failed';
+                }} catch(e) {{
+                    document.getElementById('status').innerText = "⚠️ Network Error. Try again.";
                 }}
-            }}, 1500);
+            }}
+
+            setTimeout(verify, 1000);
         </script>
     </body>
     </html>
     """)
 
-# ================= VERIFY ENDPOINT (Step 2: Validate everything) =================
-
 @app.post("/verify")
-async def verify_redirect(request: Request):
-    """
-    Step 2: Validate all security tokens and redirect
-    Checks: Session, CSRF, Timestamp, IP, Safety ID
-    """
-    
+async def verify_request(request: Request):
     try:
-        # Get headers
-        csrf_token = request.headers.get("X-CSRF-TOKEN", "")
-        session_id = request.headers.get("X-Session-ID", "")
-        timestamp = int(request.headers.get("X-Timestamp", "0"))
-        safety = request.headers.get("X-Safety", "")
-        obfuscation = request.headers.get("X-Obfuscation", "")
-        
-        # Get body
         body = await request.json()
-        token = body.get("token", "")
-        client_timestamp = body.get("timestamp", 0)
+        sid = body.get("sid")
+        ans = body.get("ans")
+        is_bot_client = body.get("bot", False)
+        csrf_header = request.headers.get("X-CSRF-Token")
         
-        # Get client info
-        client = get_client_info(request)
+        # 1. Basic validation
+        if is_bot_client: return JSONResponse({"success":False, "message": "Automation tool detected"}, 403)
         
-        # Validate session with all checks
-        validation = await validate_session(
-            session_id, csrf_token, timestamp,
-            client["ip"], client["user_agent"], safety
-        )
+        # 2. Get session
+        session = await sessions_col.find_one({ "session_id": sid, "used": False })
+        if not session: return JSONResponse({"success":False, "message": "Session expired or invalid"}, 403)
         
-        if not validation["valid"]:
-            await links_col.update_one(
-                {"random_id": "bypass_attempts"},
-                {"$inc": {"bypassed_count": 1}},
-                upsert=True
-            )
-            return JSONResponse({
-                "success": False,
-                "message": validation["reason"]
-            }, status_code=403)
+        # 3. Security Checks
+        now = time.time()
+        # Strictly enforce wait time
+        if now - session["created_at"] < MIN_WAIT_SECONDS:
+             return JSONResponse({"success":False, "message": "Verification too fast. Bot behavior detected."}, 403)
         
-        session = validation["session"]
+        # CSRF Check
+        if not hmac.compare_digest(session["csrf"], csrf_header or ""):
+             return JSONResponse({"success":False, "message": "CSRF verification failed"}, 403)
         
-        # Verify obfuscation key
-        if session.get("obfuscation") != obfuscation:
-            return JSONResponse({
-                "success": False,
-                "message": "Obfuscation mismatch"
-            }, status_code=403)
+        # Challenge Answer Check
+        if not hmac.compare_digest(session["challenge_ans"], ans or ""):
+             return JSONResponse({"success":False, "message": "JS challenge failed"}, 403)
+             
+        # IP/UA Check
+        ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        if session["ip"] != ip:
+             return JSONResponse({"success":False, "message": "IP address changed mid-session"}, 403)
         
-        # Mark session as used (one-time)
-        result = await sessions_col.update_one(
-            {"session_id": session_id, "used": False},
-            {"$set": {"used": True, "used_at": time.time()}}
-        )
+        # 4. Success - Mark used and redirect
+        await sessions_col.update_one({"session_id": sid}, {"$set": {"used": True, "used_at": now}})
         
-        if result.modified_count == 0:
-            return JSONResponse({
-                "success": False,
-                "message": "Session already used"
-            }, status_code=403)
+        link = await links_col.find_one({"random_id": session["link_id"]})
+        if not link: return JSONResponse({"success":False, "message": "Link not found"}, 404)
         
-        # Get original URL
-        link_id = session.get("link_id")
-        link = await links_col.find_one({"random_id": link_id})
+        await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
         
-        if not link:
-            return JSONResponse({
-                "success": False,
-                "message": "Link not found"
-            }, status_code=404)
-        
-        # Update click count
-        await links_col.update_one(
-            {"random_id": link_id},
-            {"$inc": {"clicks": 1}}
-        )
-        
-        # SUCCESS!
-        return JSONResponse({
-            "success": True,
-            "destination": link["original_url"]
-        })
+        return {"success": True, "url": link["original_url"]}
         
     except Exception as e:
-        print(f"Verify error: {e}")
-        return JSONResponse({
-            "success": False,
-            "message": "Verification failed"
-        }, status_code=500)
+        return JSONResponse({"success":False, "message": "System Error"}, 500)
 
-# ================= HOME =================
-
-@app.get("/")
-async def home():
-    return {
-        "service": "Shortener API with Multi-Layer Security",
-        "version": "5.0",
-        "security": [
-            "CSRF Tokens",
-            "Session IDs (Server-validated)",
-            "Safety Identifiers (Hash-based)",
-            "Timestamp Validation",
-            "IP Fingerprinting",
-            "Response Obfuscation",
-            "One-time Sessions"
-        ],
-        "endpoints": {
-            "/api?api=KEY&url=URL": "Create link",
-            "/redirect?token=XXX": "Verify page",
-            "/verify": "Backend validation"
-        }
-    }
-
-# ================= STATS =================
+# ================= HOUSEKEEPING =================
 
 @app.get("/stats")
-async def stats(api: str = Query(None)):
-    if api != ADMIN_API_KEY:
-        return JSONResponse({"status": "error", "message": "Invalid API Key"}, status_code=403)
-    
-    total_links = await links_col.count_documents({"original_url": {"$exists": True}})
-    bypass_doc = await links_col.find_one({"random_id": "bypass_attempts"})
-    bypass_count = bypass_doc.get("bypassed_count", 0) if bypass_doc else 0
-    active_sessions = await sessions_col.count_documents({"used": False})
-    used_sessions = await sessions_col.count_documents({"used": True})
-    
-    # Calculate approximate storage
-    stats_data = await db.command("dbStats")
-    storage_mb = round(stats_data.get("dataSize", 0) / (1024 * 1024), 2)
-    
-    return {
-        "total_links": total_links,
-        "bypass_attempts": bypass_count,
-        "active_sessions": active_sessions,
-        "used_sessions": used_sessions,
-        "storage_mb": storage_mb,
-        "storage_limit_mb": 500
-    }
-
-# ================= CLEANUP ENDPOINT =================
+async def get_stats(api: str = Query(None)):
+    if api != ADMIN_API_KEY: return JSONResponse({"status":"error"}, 403)
+    c_links = await links_col.count_documents({})
+    c_sess = await sessions_col.count_documents({})
+    return {"total_links": c_links, "active_sessions": c_sess}
 
 @app.get("/cleanup")
-async def cleanup_db(api: str = Query(None)):
-    """
-    Manual cleanup - Delete old data to save storage
-    Free plan = 500MB, so aggressive cleanup needed
-    """
-    if api != ADMIN_API_KEY:
-        return JSONResponse({"status": "error", "message": "Invalid API Key"}, status_code=403)
-    
+async def cleanup(api: str = Query(None)):
+    if api != ADMIN_API_KEY: return JSONResponse({"status":"error"}, 403)
     now = time.time()
-    
-    # 1. Delete used sessions (older than 1 minute)
-    used_result = await sessions_col.delete_many({
-        "used": True,
-        "used_at": {"$lt": now - 60}
-    })
-    
-    # 2. Delete expired sessions (older than 5 minutes)
-    expired_result = await sessions_col.delete_many({
-        "created_at": {"$lt": now - SESSION_EXPIRY}
-    })
-    
-    # 3. Delete old links (older than 7 days to save space)
-    old_links_result = await links_col.delete_many({
-        "original_url": {"$exists": True},
-        "created_at": {"$lt": now - (7 * 24 * 60 * 60)}  # 7 days
-    })
-    
-    # 4. Delete links with 0 clicks older than 1 day
-    unused_result = await links_col.delete_many({
-        "original_url": {"$exists": True},
-        "clicks": 0,
-        "created_at": {"$lt": now - (24 * 60 * 60)}  # 1 day
-    })
-    
-    return {
-        "status": "success",
-        "deleted": {
-            "used_sessions": used_result.deleted_count,
-            "expired_sessions": expired_result.deleted_count,
-            "old_links_7d": old_links_result.deleted_count,
-            "unused_links_1d": unused_result.deleted_count
-        },
-        "message": "Cleanup completed"
-    }
-
-# ================= AUTO CLEANUP ON STARTUP =================
+    await sessions_col.delete_many({"$or": [{"used": True}, {"created_at": {"$lt": now - SESSION_EXPIRY}}]})
+    await links_col.delete_many({"created_at": {"$lt": now - LINK_EXPIRY_SECONDS}})
+    return {"status": "success"}
 
 @app.on_event("startup")
-async def startup_cleanup():
-    """Run cleanup on every server start"""
-    try:
-        now = time.time()
-        # Quick cleanup of sessions
-        await sessions_col.delete_many({"created_at": {"$lt": now - SESSION_EXPIRY}})
-        await sessions_col.delete_many({"used": True})
-        print("Startup cleanup completed")
-    except Exception as e:
-        print(f"Startup cleanup error: {e}")
+async def on_start():
+    await init_db()
+    # Auto cleanup sessions on start
+    await sessions_col.delete_many({})
+    print("Security System Online")
