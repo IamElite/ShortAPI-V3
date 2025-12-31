@@ -1,51 +1,33 @@
-# ===============================================
-# Shortener API - DEBUG VERSION (With Full Logging)
-# Check this to see what's happening
-# ===============================================
-
-import os
-import time
-import secrets
-import json
-import base64
-import hashlib
-import hmac
-import urllib.request
+import os, time, secrets, json, base64, hashlib, hmac, urllib.request, asyncio
 from urllib.parse import quote, urlparse
 from fastapi import FastAPI, Request, Query, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# ================= CONFIGURATION =================
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://hnyx:wywyw2@cluster0.9dxlslv.mongodb.net/?retryWrites=true&w=majority")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
 SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
 SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
-
 SECRET_KEY = os.getenv("SECRET_KEY", "DebugMode2025!@#")
-
 LINK_EXPIRY = 3 * 24 * 60 * 60
 SESSION_EXPIRY = 300
 
-# ================= DATABASE =================
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["shortener_db"]
 links_col = db["links"]
 sessions_col = db["sessions"]
-logs_col = db["access_logs"]  # NEW: Logging collection
+logs_col = db["access_logs"]
 
 async def init_db():
     try:
         await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY)
         await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
-        await logs_col.create_index("created_at", expireAfterSeconds=3600)  # Logs expire in 1 hour
+        await logs_col.create_index("created_at", expireAfterSeconds=3600)
     except: pass
 
 app = FastAPI(on_startup=[init_db])
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# ================= CRYPTO =================
 
 def encrypt_token(data: dict) -> str:
     key = hashlib.sha256(SECRET_KEY.encode()).digest()
@@ -71,10 +53,7 @@ def get_ip(req: Request) -> str:
     xff = req.headers.get("X-Forwarded-For")
     return xff.split(",")[0].strip() if xff else (req.client.host if req.client else "?")
 
-# ================= LOGGING FUNCTION =================
-
 async def log_request(req: Request, event: str, details: dict = {}):
-    """Log all important request details to database"""
     log_entry = {
         "event": event,
         "ip": get_ip(req),
@@ -87,8 +66,6 @@ async def log_request(req: Request, event: str, details: dict = {}):
     }
     await logs_col.insert_one(log_entry)
     print(f"[LOG] {event} | IP: {log_entry['ip']} | Referer: {log_entry['referer'][:50]}")
-
-# ================= API =================
 
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
@@ -109,11 +86,8 @@ async def create_link(request: Request, api: str = Query(None), url: str = Query
         except: pass
     return {"status": "success", "shortenedUrl": final}
 
-# ================= REDIRECT PAGE (WITH LOGGING) =================
-
 @app.get("/redirect")
 async def redirect_page(request: Request, token: str = Query(None)):
-    # LOG EVERYTHING
     await log_request(request, "REDIRECT_PAGE_HIT", {"token": token[:20] if token else "NONE"})
     
     if not token: return HTMLResponse("Blocked", 403)
@@ -123,18 +97,15 @@ async def redirect_page(request: Request, token: str = Query(None)):
     link = await links_col.find_one({"random_id": data.get("i")})
     if not link: return HTMLResponse("Expired", 404)
 
-    # Check Referer
     referer = request.headers.get("referer", "")
-    has_valid_referer = SHORTENER_DOMAIN.lower() in referer.lower() if referer else False
+    has_valid_referer = len(referer.strip()) > 0
     
-    # LOG THE REFERER CHECK RESULT
     await log_request(request, "REFERER_CHECK", {
         "referer_value": referer,
         "shortener_domain": SHORTENER_DOMAIN,
         "is_valid": has_valid_referer
     })
     
-    # Generate session
     session_id = secrets.token_hex(24)
     csrf = secrets.token_urlsafe(16)
     n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
@@ -209,8 +180,6 @@ async def redirect_page(request: Request, token: str = Query(None)):
 </html>
     """)
 
-# ================= VERIFY (WITH LOGGING) =================
-
 @app.post("/verify")
 async def verify(request: Request, v_init: str = Cookie(None)):
     try:
@@ -218,10 +187,8 @@ async def verify(request: Request, v_init: str = Cookie(None)):
         sid, ans = body.get("sid"), body.get("ans")
         csrf = request.headers.get("X-CSRF")
         
-        # LOG VERIFY ATTEMPT
         await log_request(request, "VERIFY_ATTEMPT", {"sid": sid[:20] if sid else "NONE", "cookie_present": bool(v_init)})
         
-        # Cookie Check
         if not v_init or v_init != sid:
             await log_request(request, "VERIFY_FAIL", {"reason": "Cookie missing or mismatch"})
             return JSONResponse({"success": False, "message": "Browser verification failed."}, 403)
@@ -231,23 +198,19 @@ async def verify(request: Request, v_init: str = Cookie(None)):
             await log_request(request, "VERIFY_FAIL", {"reason": "Session not found"})
             return JSONResponse({"success": False, "message": "Session expired"}, 403)
         
-        # Referer Check - LOG THIS
         if not session.get("valid_referer"):
             await log_request(request, "VERIFY_FAIL", {"reason": "Invalid referer at session creation"})
             return JSONResponse({"success": False, "message": "Direct access blocked. Use shortener link."}, 403)
         
-        # IP Check
         if session["ip"] != get_ip(request):
             await log_request(request, "VERIFY_FAIL", {"reason": "IP mismatch"})
             return JSONResponse({"success": False, "message": "Network changed"}, 403)
         
-        # CSRF & Challenge
         if not hmac.compare_digest(session["csrf"], csrf or ""):
             return JSONResponse({"success": False, "message": "Security error"}, 403)
         if not hmac.compare_digest(session["ans"], ans or ""):
             return JSONResponse({"success": False, "message": "Verification failed"}, 403)
         
-        # SUCCESS - LOG IT
         await sessions_col.update_one({"sid": sid}, {"$set": {"used": True}})
         link = await links_col.find_one({"random_id": session["link_id"]})
         await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
@@ -260,27 +223,36 @@ async def verify(request: Request, v_init: str = Cookie(None)):
         await log_request(request, "VERIFY_ERROR", {"error": str(e)})
         return JSONResponse({"success": False, "message": "Error"}, 500)
 
-# ================= VIEW LOGS ENDPOINT =================
-
 @app.get("/logs")
 async def view_logs(api: str = Query(None), limit: int = Query(50)):
-    """View recent access logs"""
     if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
-    
     logs = await logs_col.find().sort("created_at", -1).limit(limit).to_list(limit)
-    
-    # Clean up for display
     for log in logs:
         log["_id"] = str(log["_id"])
-        if "all_headers" in log:
-            del log["all_headers"]  # Too verbose
-    
+        if "all_headers" in log: del log["all_headers"]
     return {"total": len(logs), "logs": logs}
 
-# ================= STARTUP =================
+@app.get("/cleanup")
+async def cleanup_db(api: str = Query(None)):
+    if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
+    logs_deleted = await logs_col.delete_many({})
+    sessions_deleted = await sessions_col.delete_many({})
+    return {"status": "success", "logs_deleted": logs_deleted.deleted_count, "sessions_deleted": sessions_deleted.deleted_count}
+
+async def auto_cleanup_task():
+    while True:
+        await asyncio.sleep(600)
+        try:
+            cutoff = time.time() - 1800
+            await logs_col.delete_many({"created_at": {"$lt": cutoff}})
+            await sessions_col.delete_many({"used": True})
+            print(f"[AUTO-CLEANUP] Ran at {time.strftime('%H:%M:%S')}")
+        except: pass
 
 @app.on_event("startup")
 async def start():
     await init_db()
     await sessions_col.delete_many({})
-    print("DEBUG VERSION WITH LOGGING ONLINE")
+    await logs_col.delete_many({})
+    asyncio.create_task(auto_cleanup_task())
+    print("SERVER ONLINE")
