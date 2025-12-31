@@ -183,26 +183,33 @@ async def redirect_page(request: Request, token: str = Query(None)):
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Verification</title>
+    <title>Verifying...</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
         body{{background:#0a0a0a;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
-        .box{{background:#111;border:1px solid #222;padding:2rem;border-radius:12px;text-align:center;width:300px}}
-        .btn{{background:#2563eb;color:#fff;border:0;padding:12px 24px;border-radius:8px;font-weight:700;cursor:pointer;width:100%;font-size:1rem;margin-top:1rem}}
-        .btn:disabled{{background:#333;cursor:not-allowed}}
-        #msg{{color:#666;font-size:0.85rem;margin-top:1rem}}
+        .box{{background:#111;border:1px solid #222;padding:2rem;border-radius:12px;text-align:center;width:320px}}
+        .spinner{{width:40px;height:40px;border:4px solid #333;border-top:4px solid #2563eb;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1rem}}
+        @keyframes spin{{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}
+        #status{{color:#888;font-size:0.95rem;margin-top:1rem}}
+        .error{{color:#ef4444;font-weight:600}}
+        .success{{color:#22c55e}}
+        #errorBox{{display:none;background:#1a0a0a;border:1px solid #ef4444;padding:1rem;border-radius:8px;margin-top:1rem}}
     </style>
 </head>
 <body>
     <div class="box">
-        <h2>🔐 Security Check</h2>
-        <p style="color:#888;font-size:0.9rem">Click to continue</p>
-        <button id="btn" class="btn" disabled>Loading...</button>
-        <p id="msg">Verifying browser...</p>
+        <div id="loader">
+            <div class="spinner"></div>
+            <h2>🔐 Verifying...</h2>
+            <p id="status">Please wait...</p>
+        </div>
+        <div id="errorBox">
+            <h2 style="color:#ef4444">❌ Access Denied</h2>
+            <p id="errorMsg" style="color:#888;font-size:0.9rem"></p>
+        </div>
     </div>
     <script>
         const S = {{ sid: "{session_id}", csrf: "{csrf}", n1: {n1}, n2: {n2} }};
-        let fingerprint = null;
 
         function getFingerprint() {{
             const canvas = document.createElement('canvas');
@@ -211,52 +218,50 @@ async def redirect_page(request: Request, token: str = Query(None)):
             ctx.font = '14px Arial';
             ctx.fillText('fp', 2, 2);
             const canvasHash = canvas.toDataURL().slice(-50);
-            
             const gl = canvas.getContext('webgl');
             let webglHash = 'none';
             if(gl) {{
                 const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
                 if(debugInfo) webglHash = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'x';
             }}
-            
             return btoa(canvasHash + '|' + webglHash + '|' + navigator.hardwareConcurrency + '|' + screen.width);
         }}
 
-        setTimeout(() => {{
-            fingerprint = getFingerprint();
+        async function autoVerify() {{
+            document.getElementById('status').innerText = 'Setting up...';
+            
+            await new Promise(r => setTimeout(r, 500));
+            const fingerprint = getFingerprint();
             document.cookie = "v_init=" + S.sid + ";path=/;max-age=300;SameSite=Lax";
-            document.getElementById('btn').disabled = false;
-            document.getElementById('btn').innerText = "Get Link";
-            document.getElementById('msg').innerText = "Click to get your link";
-        }}, 1000);
-
-        document.getElementById('btn').onclick = async () => {{
-            const btn = document.getElementById('btn');
-            btn.disabled = true;
-            btn.innerText = "Verifying...";
+            
+            document.getElementById('status').innerText = 'Verifying...';
             
             const ans = S.n1 * S.n2;
             try {{
                 const res = await fetch('/verify', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json', 'X-CSRF': S.csrf }},
-                    body: JSON.stringify({{ 
-                        sid: S.sid, 
-                        ans: ans.toString(),
-                        fp: fingerprint
-                    }})
+                    body: JSON.stringify({{ sid: S.sid, ans: ans.toString(), fp: fingerprint }})
                 }});
                 const d = await res.json();
                 if(d.success) {{
-                    window.location.href = d.url;
+                    document.getElementById('status').innerHTML = '<span class="success">✓ Verified! Redirecting...</span>';
+                    setTimeout(() => window.location.href = d.url, 500);
                 }} else {{
-                    document.getElementById('msg').innerText = "❌ " + d.message;
-                    btn.innerText = "Failed";
+                    showError(d.message);
                 }}
             }} catch(e) {{
-                document.getElementById('msg').innerText = "Network error";
+                showError('Network error. Please try again.');
             }}
-        }};
+        }}
+
+        function showError(msg) {{
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('errorBox').style.display = 'block';
+            document.getElementById('errorMsg').innerText = msg;
+        }}
+
+        autoVerify();
     </script>
 </body>
 </html>
