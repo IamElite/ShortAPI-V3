@@ -1,272 +1,320 @@
+# ===============================================
+# Simple Shortener API with Bypass Detection
+# ===============================================
+
 import os
 import time
 import secrets
 import json
 import urllib.request
-import re
 from urllib.parse import quote
-from fastapi import FastAPI, Request, Query, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel
 
 # ================= CONFIGURATION =================
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://hnyx:wywyw2@cluster0.9dxlslv.mongodb.net/?retryWrites=true&w=majority")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "MY_SECRET_PASS_123")
-SHORTENER_DOMAIN = "nanolinks.in"
-SHORTENER_API = "ae0271c2c57105db2fa209f5b0f20c1a965343f6"
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
+SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
+SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
 
-# Security Configurations
-MIN_WAIT_TIME = 8  # Seconds (User must spend at least this time)
-SESSION_EXPIRY = 300  # 5 Minutes (Token expires after this)
-COOKIE_NAME = "secure_client_session"
+# Link expires after 30 days
+LINK_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
 # ================= DATABASE SETUP =================
 client = AsyncIOMotorClient(MONGO_URI)
-db = client["url_protector_db"]
+db = client["shortener_db"]
 links_col = db["links"]
-sessions_col = db["sessions"]
-
-# Regex for detecting common bots
-BOT_REGEX = re.compile(r"(curl|wget|python|bot|spider|crawler|scraper|headless)", re.IGNORECASE)
 
 async def init_db():
-    # 1. Sessions cleanup: 5 Minute (300s) mein expire (Strict Security)
+    """Create TTL index for auto-expiry of links"""
     try:
-        await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
-    except:
-        pass
-
-    # 2. Links cleanup: 30 Din mein expire
-    try:
-        await links_col.create_index("created_at", expireAfterSeconds=2592000)
+        await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY_SECONDS)
     except:
         pass
 
 app = FastAPI(on_startup=[init_db])
 
+# CORS for API access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 # ================= HELPER FUNCTIONS =================
 
+def generate_token(length=12):
+    """Generate secure random token"""
+    return secrets.token_urlsafe(length)
+
 def get_base_url(request: Request):
-    """Detects the current domain and forces HTTPS."""
+    """Get base URL with HTTPS"""
     url = str(request.base_url).rstrip("/")
     if "localhost" not in url and "127.0.0.1" not in url:
         url = url.replace("http://", "https://")
     return url
 
-def is_bot(user_agent: str):
-    """Checks if the request is from a known bot/script."""
-    if not user_agent:
-        return True  # Block requests with no User-Agent
-    if len(user_agent) < 10:
-        return True # Suspiciously short User-Agent
-    return BOT_REGEX.search(user_agent) is not None
+def check_bypass(referer: str, shortener_domain: str):
+    """
+    Check if user bypassed the shortener
+    Returns: (bypassed: bool, reason: str)
+    """
+    if not referer:
+        return True, "No referer - Direct access or bypassed"
+    
+    referer_lower = referer.lower()
+    
+    # Check if came from shortener domain
+    if shortener_domain.lower() in referer_lower:
+        return False, "Came from shortener"
+    
+    # Common bypass indicators
+    bypass_keywords = ["bypass", "skip", "direct", "adfree"]
+    if any(kw in referer_lower for kw in bypass_keywords):
+        return True, "Bypass site detected in referer"
+    
+    return True, f"Unknown referer: {referer}"
 
-async def check_rate_limit(ip: str):
-    """Simple rate limiter: Max 10 requests per minute per IP."""
-    # Count sessions created by this IP in the last 60 seconds
-    window_start = time.time() - 60
-    count = await sessions_col.count_documents({
-        "ip": ip,
-        "created_at": {"$gte": window_start}
-    })
-    return count >= 10
-
-# ================= ADMIN API (GENERATE LINKS) =================
+# ================= API ENDPOINT (Admin) =================
 
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
-    """Generates a protected link using the Admin Password."""
+    """
+    Create a protected short link
     
-    # 1. Security Check
-    if api != ADMIN_PASSWORD:
-        return JSONResponse(content={"status": "error", "message": "Invalid API Key"}, status_code=403)
+    Usage: /api?api=YOUR_KEY&url=https://example.com
+    """
+    
+    # 1. Validate API key
+    if api != ADMIN_API_KEY:
+        return JSONResponse({"status": "error", "message": "Invalid API Key"}, status_code=403)
     
     if not url:
-        return JSONResponse(content={"status": "error", "message": "URL missing"}, status_code=400)
-
-    # 2. Duplicate Check (Optimization)
-    existing_link = await links_col.find_one({"original_url": url})
+        return JSONResponse({"status": "error", "message": "URL missing"}, status_code=400)
     
-    if existing_link:
-        link_id = existing_link["link_id"]
+    # 2. Check if URL already exists
+    existing = await links_col.find_one({"original_url": url})
+    
+    if existing:
+        token = existing["token"]
         # Refresh expiry
-        await links_col.update_one({"_id": existing_link["_id"]}, {"$set": {"created_at": time.time()}})
+        await links_col.update_one(
+            {"_id": existing["_id"]}, 
+            {"$set": {"created_at": time.time()}}
+        )
     else:
-        link_id = secrets.token_urlsafe(6)
+        # 3. Create new link
+        token = generate_token()
         await links_col.insert_one({
-            "link_id": link_id,
+            "token": token,
             "original_url": url,
-            "created_at": time.time()
+            "created_at": time.time(),
+            "clicks": 0,
+            "bypassed_count": 0
         })
     
-    # 3. Build URLs
+    # 4. Build redirect URL
     base_url = get_base_url(request)
-    target_url = f"{base_url}/s/{link_id}"
+    redirect_url = f"{base_url}/redirect?token={token}"
     
-    # 4. Integrate with Nanolinks API
-    final_short_url = target_url # Fallback
+    # 5. Shorten via external shortener
+    final_url = redirect_url
     
-    if SHORTENER_API:
+    if SHORTENER_API and SHORTENER_DOMAIN:
         try:
-            # Note: We encode target_url so Nanolinks processes it correctly
-            api_req_url = f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(target_url)}"
-            
-            with urllib.request.urlopen(api_req_url) as response:
-                data = json.loads(response.read().decode())
+            api_url = f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(redirect_url)}"
+            with urllib.request.urlopen(api_url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
                 if data.get("status") == "success":
-                    final_short_url = data.get("shortenedUrl")
+                    final_url = data.get("shortenedUrl", redirect_url)
         except Exception as e:
-            print(f"Shortener API Error: {e}")
-            pass
-
+            print(f"Shortener error: {e}")
+    
     return {
         "status": "success",
-        "shortenedUrl": final_short_url
+        "shortenedUrl": final_url,
+        "directUrl": redirect_url,
+        "token": token
     }
 
-# ================= STEP 1: START SESSION (Set Cookie + Token) =================
+# ================= REDIRECT ENDPOINT (User) =================
 
-@app.get("/s/{link_id}")
-async def start_session(link_id: str, request: Request, response: Response):
-    # 1. Validate User Agent (Bot Protection)
-    user_agent = request.headers.get("User-Agent", "")
-    if is_bot(user_agent):
-        return HTMLResponse("<h1>🚫 Access Denied: Bots/Scripts not allowed.</h1>", status_code=403)
-
-    # 2. Check Link Validity
-    link_data = await links_col.find_one({"link_id": link_id})
-    if not link_data:
-        return HTMLResponse("<h1>❌ Invalid or Expired Link</h1>", status_code=404)
-
-    # 3. Rate Limiting (IP Based)
-    client_ip = request.client.host
-    if await check_rate_limit(client_ip):
-         return HTMLResponse("<h1>⏳ Too many requests. Please wait a minute.</h1>", status_code=429)
-
-    # 4. Generate Session Security
-    base_url = get_base_url(request)
-    session_token = secrets.token_urlsafe(24) # The token sent to Shortener
-    client_uuid = secrets.token_hex(16)       # The cookie value (Invisible to shortener)
-    
-    # 5. Store Session in MongoDB
-    await sessions_col.insert_one({
-        "token": session_token,
-        "link_id": link_id,
-        "client_uuid": client_uuid, # Binding token to this specific browser
-        "ip": client_ip,
-        "start_time": time.time(),
-        "created_at": time.time(),
-        "used": False
-    })
-
-    # 6. Set Secure Cookie (Critical Anti-Bypass Step)
-    # httponly=True prevents JS from reading it (XSS protection)
-    # samesite='lax' allows redirect flows to work
-    # UPDATED: Points to /redirect now instead of /verify
-    verify_url = f"{base_url}/redirect?token={session_token}"
-    
-    response = HTMLResponse(f"""
-    <html>
-    <head><meta http-equiv="refresh" content="0;url=https://{SHORTENER_DOMAIN}/?url={quote(verify_url)}"></head>
-    <body>
-        <h3>Securing connection...</h3>
-        <p>Redirecting to provider.</p>
-    </body>
-    </html>
-    """)
-    
-    response.set_cookie(
-        key=COOKIE_NAME, 
-        value=client_uuid, 
-        httponly=True, 
-        max_age=SESSION_EXPIRY,
-        samesite="lax"
-    )
-    
-    return response
-
-# ================= STEP 2: VERIFICATION (Check Cookie + Time) =================
-# Renamed from /verify to /redirect to match your flow diagram
 @app.get("/redirect")
-async def verify_session(request: Request, token: str = Query(...)):
-    # 1. Validate User Agent again
-    user_agent = request.headers.get("User-Agent", "")
-    if is_bot(user_agent):
-        return HTMLResponse("<h1>🚫 Bot Detected. Access Denied.</h1>", status_code=403)
-
-    # 2. Find Session by Token
-    session = await sessions_col.find_one({"token": token})
+async def redirect_page(request: Request, token: str = Query(None)):
+    """
+    Redirect page with bypass detection
     
-    if not session:
-        return HTMLResponse("<h1>🚫 Invalid or Expired Session. Start again.</h1>", status_code=400)
-
-    if session.get("used"):
-        return HTMLResponse("<h1>🚫 This link has already been used.</h1>", status_code=409)
-
-    # 3. SECURITY: Cookie Binding Check
-    # Does the browser have the same cookie we set in Step 1?
-    client_cookie = request.cookies.get(COOKIE_NAME)
+    User clicks short link → Shortener → This page → Original URL
+    """
     
-    if not client_cookie or client_cookie != session.get("client_uuid"):
-        # This happens if user used a bypass script or shared the verify link
+    if not token:
         return HTMLResponse("""
-            <div style="text-align:center; padding: 20px;">
-                <h1 style="color:red;">🚫 Security Check Failed</h1>
-                <p>Browser signature mismatch.</p>
-                <p><b>Possible Reason:</b> You are using a bypass script, Incognito mode, or cookies are disabled.</p>
-                <p>Please click the original link again.</p>
-            </div>
-        """, status_code=403)
-
-    # 4. SECURITY: Time Check (Anti-Fast Bypass)
-    time_spent = time.time() - session["start_time"]
-    if time_spent < MIN_WAIT_TIME:
+        <html>
+        <head><title>Invalid Link</title></head>
+        <body style="text-align:center; padding:50px; font-family:Arial; background:#f5f5f5;">
+            <h1 style="color:red;">❌ Invalid Link</h1>
+            <p>Token missing or invalid.</p>
+        </body>
+        </html>
+        """, status_code=400)
+    
+    # 1. Find link in database
+    link = await links_col.find_one({"token": token})
+    
+    if not link:
+        return HTMLResponse("""
+        <html>
+        <head><title>Link Expired</title></head>
+        <body style="text-align:center; padding:50px; font-family:Arial; background:#fff3e0;">
+            <h1 style="color:orange;">⏰ Link Expired</h1>
+            <p>This link has expired or does not exist.</p>
+        </body>
+        </html>
+        """, status_code=404)
+    
+    # 2. Check for bypass
+    referer = request.headers.get("Referer", "")
+    bypassed, reason = check_bypass(referer, SHORTENER_DOMAIN)
+    
+    original_url = link["original_url"]
+    
+    # 3. Update stats
+    if bypassed:
+        await links_col.update_one(
+            {"_id": link["_id"]},
+            {"$inc": {"bypassed_count": 1, "clicks": 1}}
+        )
+    else:
+        await links_col.update_one(
+            {"_id": link["_id"]},
+            {"$inc": {"clicks": 1}}
+        )
+    
+    # 4. If bypassed - show warning page, else redirect
+    if bypassed:
         return HTMLResponse(f"""
-            <div style="text-align:center; padding: 20px; font-family: sans-serif;">
-                <h1 style="color:orange;">⏳ Too Fast!</h1>
-                <p>You arrived in {int(time_spent)} seconds.</p>
-                <p>Human verification requires at least {MIN_WAIT_TIME} seconds.</p>
-                <p>Please go back and wait on the shortener page.</p>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>⚠️ Bypass Detected</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body {{
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+                    min-height: 100vh;
+                    margin: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 20px;
+                    text-align: center;
+                    max-width: 400px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                }}
+                h1 {{ color: #e74c3c; margin-bottom: 10px; }}
+                p {{ color: #666; line-height: 1.6; }}
+                .warning {{ font-size: 60px; margin-bottom: 20px; }}
+                .btn {{
+                    display: inline-block;
+                    margin-top: 20px;
+                    padding: 15px 30px;
+                    background: #e74c3c;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 10px;
+                    font-weight: bold;
+                }}
+                .btn:hover {{ background: #c0392b; }}
+                .small {{ font-size: 12px; color: #999; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="warning">⚠️</div>
+                <h1>Bypass Detected!</h1>
+                <p>You tried to skip the advertisement. Please use the original short link to support us.</p>
+                <p class="small">Reason: {reason}</p>
+                <a href="{original_url}" class="btn">Continue Anyway →</a>
             </div>
-        """, status_code=429)
-
-    # 5. Success! Get Original Link
-    link_data = await links_col.find_one({"link_id": session["link_id"]})
+        </body>
+        </html>
+        """)
     
-    if not link_data:
-        return HTMLResponse("<h1>❌ Original Link Not Found</h1>", status_code=404)
-
-    # 6. Mark Session as Used (Prevents Replay Attacks)
-    await sessions_col.update_one({"_id": session["_id"]}, {"$set": {"used": True}})
-    
-    # 7. Final Redirect
+    # 5. No bypass - Direct redirect
     return HTMLResponse(f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Success</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Redirecting...</title>
+        <meta http-equiv="refresh" content="0; url={original_url}">
         <style>
-            body {{ font-family: sans-serif; text-align: center; padding: 20px; background: #e8f5e9; }}
-            .box {{ background: white; padding: 40px; border-radius: 15px; max-width: 500px; margin: 50px auto; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}
+            body {{
+                font-family: Arial, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                margin: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+            }}
         </style>
-        <script>
-            setTimeout(() => {{
-                window.location.href = "{link_data['original_url']}";
-            }}, 1500);
-        </script>
     </head>
     <body>
-        <div class="box">
-            <h1 style="color: #27ae60;">✅ Verified</h1>
-            <p>Security checks passed.</p>
-            <p>Redirecting to destination...</p>
+        <div>
+            <h2>✅ Redirecting...</h2>
+            <p>If not redirected, <a href="{original_url}" style="color:white;">click here</a></p>
         </div>
     </body>
     </html>
     """)
 
+# ================= HOME ENDPOINT =================
+
 @app.get("/")
 async def home():
-    return {"message": "Secure Anti-Bypass System Active v2.0", "status": "Running"}
+    """API Info"""
+    return {
+        "service": "Shortener API with Bypass Detection",
+        "version": "2.0",
+        "endpoints": {
+            "/api?api=KEY&url=URL": "Create protected short link",
+            "/redirect?token=XXX": "Redirect with bypass check"
+        }
+    }
+
+# ================= STATS ENDPOINT =================
+
+@app.get("/stats")
+async def stats(api: str = Query(None)):
+    """Get link statistics (Admin only)"""
+    
+    if api != ADMIN_API_KEY:
+        return JSONResponse({"status": "error", "message": "Invalid API Key"}, status_code=403)
+    
+    total_links = await links_col.count_documents({})
+    
+    # Get top 10 links by clicks
+    top_links = await links_col.find().sort("clicks", -1).limit(10).to_list(10)
+    
+    links_data = []
+    for link in top_links:
+        links_data.append({
+            "token": link["token"],
+            "url": link["original_url"][:50] + "..." if len(link["original_url"]) > 50 else link["original_url"],
+            "clicks": link.get("clicks", 0),
+            "bypassed": link.get("bypassed_count", 0)
+        })
+    
+    return {
+        "total_links": total_links,
+        "top_links": links_data
+    }
