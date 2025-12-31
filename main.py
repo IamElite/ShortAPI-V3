@@ -31,7 +31,7 @@ def get_random_shortener():
     active = [(d, a) for d, a in providers if d and a]
     return random.choice(active) if active else (None, None)
 
-TOKEN_EXPIRY_SECONDS = 120
+TOKEN_EXPIRY_SECONDS = 3600
 LINK_EXPIRY = 3 * 24 * 60 * 60
 SESSION_EXPIRY = 300
 
