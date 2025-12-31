@@ -1,6 +1,6 @@
 # ===============================================
-# Shortener API - IRON GATE v11.0 (BOT-TRAP)
-# Blacklists tokens exposed by bypass bots
+# Shortener API - DEBUG VERSION (With Full Logging)
+# Check this to see what's happening
 # ===============================================
 
 import os
@@ -12,7 +12,7 @@ import hashlib
 import hmac
 import urllib.request
 from urllib.parse import quote, urlparse
-from fastapi import FastAPI, Request, Query, Response, Cookie
+from fastapi import FastAPI, Request, Query, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,42 +23,29 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
 SHORTENER_DOMAIN = os.getenv("SHORTENER_DOMAIN", "nanolinks.in")
 SHORTENER_API = os.getenv("SHORTENER_API", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "BotTrap2025!@#")
+SECRET_KEY = os.getenv("SECRET_KEY", "DebugMode2025!@#")
 
-# Timing
-LINK_EXPIRY_SECONDS = 3 * 24 * 60 * 60 
-SESSION_EXPIRY = 600
+LINK_EXPIRY = 3 * 24 * 60 * 60
+SESSION_EXPIRY = 300
 
-# ================= DATABASE SETUP =================
+# ================= DATABASE =================
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["shortener_db"]
 links_col = db["links"]
 sessions_col = db["sessions"]
-abuse_col = db["token_abuse"] # Blacklisted tokens go here
+logs_col = db["access_logs"]  # NEW: Logging collection
 
 async def init_db():
     try:
-        await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY_SECONDS)
+        await links_col.create_index("created_at", expireAfterSeconds=LINK_EXPIRY)
         await sessions_col.create_index("created_at", expireAfterSeconds=SESSION_EXPIRY)
-        await abuse_col.create_index("created_at", expireAfterSeconds=3600) # Only block for 1hr
-        await links_col.create_index("random_id", unique=True)
+        await logs_col.create_index("created_at", expireAfterSeconds=3600)  # Logs expire in 1 hour
     except: pass
 
 app = FastAPI(on_startup=[init_db])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
-
-# ================= SECURITY HELPERS =================
-
-def get_client_ip(request: Request) -> str:
-    xff = request.headers.get("X-Forwarded-For")
-    if xff: return xff.split(",")[0].strip()
-    return request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
+# ================= CRYPTO =================
 
 def encrypt_token(data: dict) -> str:
     key = hashlib.sha256(SECRET_KEY.encode()).digest()
@@ -80,147 +67,220 @@ def decrypt_token(token: str) -> dict:
         return json.loads(dec.decode())
     except: return None
 
-def is_bot(ua: str) -> bool:
-    """Detects bots and bypass tool signatures"""
-    if not ua: return True
-    ua = ua.lower()
-    bot_keywords = ["python", "curl", "wget", "telegram", "bot", "spider", "crawl", "cloud", "headless", "aiohttp", "httpx", "go-http"]
-    return any(bk in ua for bk in bot_keywords)
+def get_ip(req: Request) -> str:
+    xff = req.headers.get("X-Forwarded-For")
+    return xff.split(",")[0].strip() if xff else (req.client.host if req.client else "?")
 
-# ================= ROUTES =================
+# ================= LOGGING FUNCTION =================
+
+async def log_request(req: Request, event: str, details: dict = {}):
+    """Log all important request details to database"""
+    log_entry = {
+        "event": event,
+        "ip": get_ip(req),
+        "referer": req.headers.get("referer", "EMPTY"),
+        "user_agent": req.headers.get("user-agent", "EMPTY")[:200],
+        "all_headers": dict(req.headers),
+        "created_at": time.time(),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        **details
+    }
+    await logs_col.insert_one(log_entry)
+    print(f"[LOG] {event} | IP: {log_entry['ip']} | Referer: {log_entry['referer'][:50]}")
+
+# ================= API =================
 
 @app.get("/api")
 async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
-    if api != ADMIN_API_KEY: return JSONResponse({"status":"error"}, 403)
+    if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
     rid = secrets.token_urlsafe(8)
-    token = encrypt_token({"i": rid, "t": int(time.time()), "s": secrets.token_hex(4)})
+    token = encrypt_token({"i": rid, "t": int(time.time())})
     await links_col.update_one({"random_id": rid}, {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}}, upsert=True)
     
-    base = str(request.base_url).rstrip("/")
-    if "localhost" not in base: base = base.replace("http://", "https://")
+    base = str(request.base_url).rstrip("/").replace("http://", "https://") if "localhost" not in str(request.base_url) else str(request.base_url).rstrip("/")
     red_url = f"{base}/redirect?token={token}"
     
     final = red_url
     if SHORTENER_API:
         try:
-            req_url = f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(red_url)}"
-            with urllib.request.urlopen(req_url, timeout=5) as r:
+            with urllib.request.urlopen(f"https://{SHORTENER_DOMAIN}/api?api={SHORTENER_API}&url={quote(red_url)}", timeout=5) as r:
                 d = json.loads(r.read().decode())
                 if d.get("status") == "success": final = d.get("shortenedUrl")
         except: pass
     return {"status": "success", "shortenedUrl": final}
 
+# ================= REDIRECT PAGE (WITH LOGGING) =================
+
 @app.get("/redirect")
-async def gate_handler(request: Request, token: str = Query(None)):
-    if not token: return HTMLResponse("Denied", 403)
-    data = decrypt_token(token)
-    if not data: return HTMLResponse("Access Denied", 403)
+async def redirect_page(request: Request, token: str = Query(None)):
+    # LOG EVERYTHING
+    await log_request(request, "REDIRECT_PAGE_HIT", {"token": token[:20] if token else "NONE"})
     
-    ua = request.headers.get("User-Agent", "")
-    ip = get_client_ip(request)
-    token_hash = hashlib.md5(token.encode()).hexdigest()
+    if not token: return HTMLResponse("Blocked", 403)
+    data = decrypt_token(token)
+    if not data: return HTMLResponse("Invalid", 403)
+    
+    link = await links_col.find_one({"random_id": data.get("i")})
+    if not link: return HTMLResponse("Expired", 404)
 
-    # 1. BOT TRAP: If a bot hits this, blacklist the token FOREVER for everyone
-    if is_bot(ua):
-        await abuse_col.update_one(
-            {"token_hash": token_hash},
-            {"$set": {"reason": f"Exposed by bot: {ua[:50]}", "created_at": time.time()}},
-            upsert=True
-        )
-        return HTMLResponse("<h1>Bot Blocked</h1>", status_code=403)
-
-    # 2. CHECK BLACKLIST: Did a bot touch this token before the user?
-    abuse = await abuse_col.find_one({"token_hash": token_hash})
-    if abuse:
-        return HTMLResponse(f"""
-        <body style="background:#0a0a0a;color:#ff4444;font-family:sans-serif;text-align:center;padding:50px;">
-            <h1>⛔ Link Compromised</h1>
-            <p style="color:#666;">This link has been exposed by an unauthorized bypass bot and is now blocked.</p>
-            <p style="color:#444;font-size:0.8rem;">Please use the original short link from the source.</p>
-        </body>
-        """, status_code=403)
-
-    # 3. Create Session
-    session_id = secrets.token_hex(32)
+    # Check Referer
+    referer = request.headers.get("referer", "")
+    has_valid_referer = SHORTENER_DOMAIN.lower() in referer.lower() if referer else False
+    
+    # LOG THE REFERER CHECK RESULT
+    await log_request(request, "REFERER_CHECK", {
+        "referer_value": referer,
+        "shortener_domain": SHORTENER_DOMAIN,
+        "is_valid": has_valid_referer
+    })
+    
+    # Generate session
+    session_id = secrets.token_hex(24)
     csrf = secrets.token_urlsafe(16)
     n1, n2 = secrets.randbelow(50)+1, secrets.randbelow(50)+1
-    ans = str(n1 + n2)
-
+    
     await sessions_col.insert_one({
-        "session_id": session_id,
+        "sid": session_id,
         "link_id": data["i"],
-        "ip": ip,
+        "ip": get_ip(request),
         "csrf": csrf,
-        "ans": ans,
+        "ans": str(n1*n2),
+        "valid_referer": has_valid_referer,
         "created_at": time.time(),
         "used": False
     })
 
     return HTMLResponse(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8"><title>Finalizing...</title>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>
-            body {{ background:#050505; color:white; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }}
-            .c {{ background:#111; border:1px solid #222; padding:2rem; border-radius:12px; text-align:center; width:280px; }}
-            .l {{ border:3px solid #222; border-top:3px solid #3b82f6; border-radius:50%; width:30px; height:30px; animation:spin 0.7s linear infinite; margin:1rem auto; }}
-            @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
-            .btn {{ display:none; background:#3b82f6; color:white; border:0; padding:12px; border-radius:6px; font-weight:700; cursor:pointer; width:100%; }}
-        </style>
-    </head>
-    <body>
-        <div class="c">
-            <h2 style="margin:0 0 1rem 0;">Ready</h2>
-            <div id="l" class="l"></div>
-            <button id="b" class="btn" onclick="v()">Verify & Get Link</button>
-        </div>
-        <script>
-            setTimeout(() => {{ 
-                document.getElementById('l').style.display='none';
-                document.getElementById('b').style.display='block';
-            }}, 500);
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body{{background:#0a0a0a;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
+        .box{{background:#111;border:1px solid #222;padding:2rem;border-radius:12px;text-align:center;width:300px}}
+        .btn{{background:#2563eb;color:#fff;border:0;padding:12px 24px;border-radius:8px;font-weight:700;cursor:pointer;width:100%;font-size:1rem;margin-top:1rem}}
+        .btn:disabled{{background:#333;cursor:not-allowed}}
+        #msg{{color:#666;font-size:0.85rem;margin-top:1rem}}
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>🔐 Security Check</h2>
+        <p style="color:#888;font-size:0.9rem">Complete verification to continue</p>
+        <button id="btn" class="btn" disabled>Loading...</button>
+        <p id="msg">Initializing...</p>
+    </div>
+    <script>
+        const S = {{ sid: "{session_id}", csrf: "{csrf}", n1: {n1}, n2: {n2} }};
 
-            async function v() {{
+        setTimeout(() => {{
+            document.cookie = "v_init=" + S.sid + ";path=/;max-age=300;SameSite=Lax";
+            document.getElementById('btn').disabled = false;
+            document.getElementById('btn').innerText = "Get Link";
+            document.getElementById('msg').innerText = "Click to proceed";
+        }}, 1000);
+
+        document.getElementById('btn').onclick = async () => {{
+            const btn = document.getElementById('btn');
+            btn.disabled = true;
+            btn.innerText = "Verifying...";
+            
+            const ans = S.n1 * S.n2;
+            try {{
                 const res = await fetch('/verify', {{
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json', 'X-CSRF': "{csrf}" }},
-                    body: JSON.stringify({{ sid: "{session_id}", ans: ({n1}+{n2}).toString() }})
+                    headers: {{ 'Content-Type': 'application/json', 'X-CSRF': S.csrf }},
+                    body: JSON.stringify({{ sid: S.sid, ans: ans.toString() }})
                 }});
                 const d = await res.json();
-                if(d.success) window.location.href = d.url; else alert(d.message);
+                if(d.success) {{
+                    window.location.href = d.url;
+                }} else {{
+                    document.getElementById('msg').innerText = "❌ " + d.message;
+                    btn.innerText = "Failed";
+                }}
+            }} catch(e) {{
+                document.getElementById('msg').innerText = "Network error";
             }}
-        </script>
-    </body>
-    </html>
+        }};
+    </script>
+</body>
+</html>
     """)
 
+# ================= VERIFY (WITH LOGGING) =================
+
 @app.post("/verify")
-async def verify(request: Request):
+async def verify(request: Request, v_init: str = Cookie(None)):
     try:
         body = await request.json()
         sid, ans = body.get("sid"), body.get("ans")
         csrf = request.headers.get("X-CSRF")
         
-        session = await sessions_col.find_one({"session_id": sid, "used": False})
-        if not session: return JSONResponse({"success":False, "message": "Session Expired"}, 403)
+        # LOG VERIFY ATTEMPT
+        await log_request(request, "VERIFY_ATTEMPT", {"sid": sid[:20] if sid else "NONE", "cookie_present": bool(v_init)})
         
-        # Security Consistency
-        if session["ip"] != get_client_ip(request): return JSONResponse({"success":False, "message": "IP Mismatch"}, 403)
-        if not hmac.compare_digest(session["csrf"], csrf or ""): return JSONResponse({"success":False, "message": "Security Error"}, 403)
-        if not hmac.compare_digest(session["ans"], ans or ""): return JSONResponse({"success":False, "message": "Logic Error"}, 403)
-
-        # OK
-        await sessions_col.update_one({"session_id": sid}, {"$set": {"used": True}})
+        # Cookie Check
+        if not v_init or v_init != sid:
+            await log_request(request, "VERIFY_FAIL", {"reason": "Cookie missing or mismatch"})
+            return JSONResponse({"success": False, "message": "Browser verification failed."}, 403)
+        
+        session = await sessions_col.find_one({"sid": sid, "used": False})
+        if not session:
+            await log_request(request, "VERIFY_FAIL", {"reason": "Session not found"})
+            return JSONResponse({"success": False, "message": "Session expired"}, 403)
+        
+        # Referer Check - LOG THIS
+        if not session.get("valid_referer"):
+            await log_request(request, "VERIFY_FAIL", {"reason": "Invalid referer at session creation"})
+            return JSONResponse({"success": False, "message": "Direct access blocked. Use shortener link."}, 403)
+        
+        # IP Check
+        if session["ip"] != get_ip(request):
+            await log_request(request, "VERIFY_FAIL", {"reason": "IP mismatch"})
+            return JSONResponse({"success": False, "message": "Network changed"}, 403)
+        
+        # CSRF & Challenge
+        if not hmac.compare_digest(session["csrf"], csrf or ""):
+            return JSONResponse({"success": False, "message": "Security error"}, 403)
+        if not hmac.compare_digest(session["ans"], ans or ""):
+            return JSONResponse({"success": False, "message": "Verification failed"}, 403)
+        
+        # SUCCESS - LOG IT
+        await sessions_col.update_one({"sid": sid}, {"$set": {"used": True}})
         link = await links_col.find_one({"random_id": session["link_id"]})
-        
         await links_col.update_one({"random_id": session["link_id"]}, {"$inc": {"clicks": 1}})
+        
+        await log_request(request, "VERIFY_SUCCESS", {"link_id": session["link_id"]})
+        
         return {"success": True, "url": link["original_url"]}
-    except: return JSONResponse({"success":False, "message": "System Error"}, 500)
+        
+    except Exception as e:
+        await log_request(request, "VERIFY_ERROR", {"error": str(e)})
+        return JSONResponse({"success": False, "message": "Error"}, 500)
+
+# ================= VIEW LOGS ENDPOINT =================
+
+@app.get("/logs")
+async def view_logs(api: str = Query(None), limit: int = Query(50)):
+    """View recent access logs"""
+    if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
+    
+    logs = await logs_col.find().sort("created_at", -1).limit(limit).to_list(limit)
+    
+    # Clean up for display
+    for log in logs:
+        log["_id"] = str(log["_id"])
+        if "all_headers" in log:
+            del log["all_headers"]  # Too verbose
+    
+    return {"total": len(logs), "logs": logs}
+
+# ================= STARTUP =================
 
 @app.on_event("startup")
 async def start():
     await init_db()
     await sessions_col.delete_many({})
-    print("IRON GATE v11.0 (BOT-TRAP) ONLINE")
+    print("DEBUG VERSION WITH LOGGING ONLINE")
