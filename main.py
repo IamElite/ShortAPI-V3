@@ -9,7 +9,7 @@ MONGO_URI_1 = os.getenv("MONGO_URI_1", "mongodb+srv://hnyx:wywyw2@cluster0.9dxls
 MONGO_URI_2 = os.getenv("MONGO_URI_2", "mongodb+srv://public:abishnoimf@cluster0.rqk6ihd.mongodb.net/?retryWrites=true&w=majority")
 MONGO_URI_3 = os.getenv("MONGO_URI_3", "mongodb+srv://ravi:ravi12345@cluster0.hndinhj.mongodb.net/?retryWrites=true&w=majority")
 
-ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "MY_SECRET_PASS_123")
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "DurgeshShornerApi")
 
 SHORT_BASE_1 = os.getenv("SHORT_BASE_1", "nanolinks.in")
 SHORT_API_1 = os.getenv("SHORT_API_1", "ae0271c2c57105db2fa209f5b0f20c1a965343f6")
@@ -123,34 +123,83 @@ async def log_request(req: Request, event: str, details: dict = {}):
 async def homepage():
     return HTMLResponse("""
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>SYNTAX REALM</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYNTAX REALM | LIVE</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{background:linear-gradient(135deg,#0a0a0a 0%,#1a1a2e 100%);color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
-        .container{text-align:center}
-        .logo-circle{width:120px;height:120px;border-radius:50%;border:3px solid #2563eb;margin:0 auto 1.5rem;overflow:hidden;box-shadow:0 0 30px rgba(37,99,235,0.3)}
-        .logo-circle img{width:100%;height:100%;object-fit:cover}
-        .brand{font-size:3rem;font-weight:800;letter-spacing:8px;background:linear-gradient(90deg,#2563eb,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-        .sub{font-size:1.5rem;font-weight:300;color:#888;letter-spacing:4px;margin-top:0.5rem}
-        .status{margin-top:2rem;display:inline-flex;align-items:center;gap:8px;background:#111;padding:10px 20px;border-radius:50px;border:1px solid #222}
-        .dot{width:10px;height:10px;background:#22c55e;border-radius:50%;animation:pulse 2s infinite}
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
-        .status-text{color:#888;font-size:0.9rem}
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
+        
+        body {
+            background: #020205; color: #fff; height: 100dvh;
+            display: flex; align-items: center; justify-content: center; overflow: hidden;
+        }
+
+        .bg {
+            position: absolute; inset: 0; z-index: -1;
+            background: radial-gradient(circle at 20% 30%, #1e3a8a 0%, transparent 40%),
+                        radial-gradient(circle at 80% 70%, #581c87 0%, transparent 40%);
+            filter: blur(60px); opacity: 0.6; animation: move 10s ease infinite alternate;
+        }
+        @keyframes move { from { transform: scale(1); } to { transform: scale(1.2); } }
+
+        .container {
+            text-align: center; width: 90%; max-width: 500px;
+            display: flex; flex-direction: column; align-items: center; gap: 20px;
+        }
+
+        .logo {
+            width: clamp(160px, 45vw, 220px); height: clamp(160px, 45vw, 220px);
+            border-radius: 50%; border: 3px solid #3b82f6; padding: 6px;
+            box-shadow: 0 0 40px rgba(59, 130, 246, 0.4);
+            animation: float 4s ease-in-out infinite;
+        }
+        .logo img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-15px); } }
+
+        .name {
+            font-size: clamp(2rem, 8vw, 3.5rem); font-weight: 900; letter-spacing: 4px;
+            color: #ffffff;
+            animation: grow 3s ease-in-out infinite alternate;
+        }
+        @keyframes shine { to { background-position: 200%; } }
+        @keyframes grow { from { transform: scale(1); } to { transform: scale(1.05); } }
+
+        .status {
+            display: flex; align-items: center; gap: 8px; color: #22c55e;
+            font-size: 0.8rem; font-weight: 800; letter-spacing: 2px;
+        }
+        .dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 10px #22c55e; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        .btn-group { display: flex; gap: 15px; margin-top: 15px; width: 100%; justify-content: center; flex-wrap: wrap; }
+        
+        .btn {
+            text-decoration: none; padding: 12px 25px; border-radius: 12px;
+            font-size: 0.9rem; font-weight: 600; transition: 0.3s;
+            border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px);
+        }
+        .btn-primary { background: #3b82f6; color: white; box-shadow: 0 10px 20px -5px rgba(59,130,246,0.5); }
+        .btn-secondary { background: rgba(255,255,255,0.05); color: white; }
+        
+        .btn:hover { transform: translateY(-3px); filter: brightness(1.2); }
     </style>
 </head>
 <body>
+    <div class="bg"></div>
     <div class="container">
-        <div class="logo-circle">
-            <img src="https://i.ibb.co/placeholder.png" alt="Logo" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%232563eb%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2240%22 font-family=%22system-ui%22>S</text></svg>'">
+        <div class="logo">
+            <img src="https://i.pinimg.com/736x/58/ee/c5/58eec56f64d919b5e1a820f169c8db16.jpg" alt="Logo">
         </div>
-        <h1 class="brand">SYNTAX</h1>
-        <p class="sub">REALM</p>
-        <div class="status">
-            <div class="dot"></div>
-            <span class="status-text">Server is Live</span>
+        
+        <h1 class="name">SYNTAX REALM</h1>
+        
+        <div class="status"><div class="dot"></div> SERVER IS LIVE</div>
+
+        <div class="btn-group">
+            <a href="https://t.me/SyntaxRealm" target="_blank" class="btn btn-primary">Join Community</a>
+            <a href="https://t.me/PookieRealm" target="_blank" class="btn btn-secondary">View Work</a>
         </div>
     </div>
 </body>
@@ -158,24 +207,122 @@ async def homepage():
     """)
 
 @app.get("/api")
-async def create_link(request: Request, api: str = Query(None), url: str = Query(None)):
-    if api != ADMIN_API_KEY: return JSONResponse({"error": "auth"}, 403)
-    rid = secrets.token_urlsafe(8)
-    token = encrypt_token({"i": rid, "t": int(time.time())})
-    await DB['links'].update_one({"random_id": rid}, {"$set": {"original_url": url, "created_at": time.time(), "clicks": 0}}, upsert=True)
+async def create_link(request: Request, api: str = Query(None), url: str = Query(None), alias: str = Query(None), expiry: int = Query(0), password: str = Query(None), custom_base: str = Query(None), custom_api: str = Query(None)):
+    base = str(request.base_url).rstrip("/")
+    if "localhost" not in base:
+        base = base.replace("http://", "https://")
     
-    base = str(request.base_url).rstrip("/").replace("http://", "https://") if "localhost" not in str(request.base_url) else str(request.base_url).rstrip("/")
+    if not api and not custom_base:
+        return {
+            "documentation": {
+                "create_api": f"{base}/api",
+                "basic": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com",
+                "withAlias": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com&alias=mylink",
+                "withExpiry": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com&expiry=7",
+                "withPassword": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com&password=secret123",
+                "advanced": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com&alias=mylink&expiry=7&password=secret",
+                "customProvider": f"{base}/api?custom_base=https://{SHORT_BASE_1}&custom_api={SHORT_API_1}&url=https://google.com",
+                "customProvider2": f"{base}/api?custom_base={SHORT_BASE_1}&custom_api={SHORT_API_1}&url=https://google.com",
+                "customProviderAdvanced": f"{base}/api?custom_base=https://{SHORT_BASE_1}&custom_api={SHORT_API_1}&url=https://google.com&alias=mylink&expiry=7&password=secret"
+            },
+            "examples": {
+                "basic": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com",
+                "advanced": f"{base}/api?api={ADMIN_API_KEY}&url=https://google.com&alias=mylink&expiry=7&password=secret",
+                "custom_provider_basic": f"{base}/api?custom_base=https://{SHORT_BASE_1}&custom_api={SHORT_API_1}&url=https://google.com",
+                "custom_provider_advanced": f"{base}/api?custom_base=https://{SHORT_BASE_1}&custom_api={SHORT_API_1}&url=https://google.com&alias=mylink&expiry=7&password=secret"
+            },
+            "endpoints": {
+                "analytics": f"{base}/analytics/TOKEN",
+                "qrCode": f"{base}/qr/TOKEN",
+                "logs": f"{base}/logs?api={ADMIN_API_KEY}",
+                "cleanup": f"{base}/cleanup?api={ADMIN_API_KEY}"
+            }
+        }
+    
+    if not url:
+        return JSONResponse({"status": "error", "message": "Missing URL parameter"}, 400)
+    
+    # Custom provider mode OR Admin mode
+    is_custom_mode = bool(custom_base and custom_api)
+    
+    if not is_custom_mode:
+        if api != ADMIN_API_KEY:
+            return JSONResponse({"status": "error", "message": "Invalid API Key"}, 401)
+    
+    rid = alias if alias else secrets.token_urlsafe(8)
+    
+    # Calculate expiry timestamp
+    expiry_time = None
+    if expiry > 0:
+        expiry_time = time.time() + (expiry * 24 * 60 * 60)
+    
+    # Store link data
+    link_data = {
+        "original_url": url,
+        "created_at": time.time(),
+        "clicks": 0,
+        "password": password,
+        "expiry": expiry_time,
+        "alias": alias
+    }
+    await DB['links'].update_one({"random_id": rid}, {"$set": link_data}, upsert=True)
+    
+    # Create token
+    token_data = {"i": rid, "t": int(time.time())}
+    if password:
+        token_data["p"] = password
+    if expiry_time:
+        token_data["e"] = expiry_time
+    token = encrypt_token(token_data)
+    
     red_url = f"{base}/redirect?token={token}"
     
+    # Use custom provider or default providers
     final = red_url
-    shortener_domain, shortener_api = get_random_shortener()
-    if shortener_domain and shortener_api:
+    if is_custom_mode:
         try:
-            with urllib.request.urlopen(f"https://{shortener_domain}/api?api={shortener_api}&url={quote(red_url)}", timeout=5) as r:
+            provider_url = custom_base if custom_base.startswith("http") else f"https://{custom_base}"
+            if not provider_url.endswith("/api"):
+                provider_url = provider_url.rstrip("/") + "/api"
+            fetch_url = f"{provider_url}?api={custom_api}&url={quote(url)}"
+            if alias:
+                fetch_url += f"&alias={quote(alias)}"
+            with urllib.request.urlopen(fetch_url, timeout=5) as r:
                 d = json.loads(r.read().decode())
-                if d.get("status") == "success": final = d.get("shortenedUrl")
-        except: pass
-    return {"status": "success", "shortenedUrl": final, "directUrl": red_url}
+                if d.get("status") == "success":
+                    final = d.get("shortenedUrl") or d.get("shortUrl") or d.get("url")
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": f"Provider error: {str(e)}"}, 502)
+    else:
+        shortener_domain, shortener_api = get_random_shortener()
+        used_provider = shortener_domain or "None"
+        if shortener_domain and shortener_api:
+            try:
+                fetch_url = f"https://{shortener_domain}/api?api={shortener_api}&url={quote(red_url)}"
+                if alias:
+                    fetch_url += f"&alias={quote(alias)}"
+                with urllib.request.urlopen(fetch_url, timeout=5) as r:
+                    d = json.loads(r.read().decode())
+                    if d.get("status") == "success":
+                        final = d.get("shortenedUrl")
+            except:
+                pass
+    
+    qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={quote(red_url)}"
+    
+    return {
+        "status": "success",
+        "shortenedUrl": final,
+        "directUrl": red_url,
+        "qrCode": qr_image_url,
+        "analytics": f"{base}/analytics/{token}",
+        "mode": f"Custom Provider ({urlparse(custom_base).netloc or custom_base.replace('https://','').replace('http://','').split('/')[0]})" if is_custom_mode else f"Default Provider ({used_provider})",
+        "config": {
+            "alias": alias or "auto-generated",
+            "expiry": f"{expiry} days" if expiry > 0 else "Never",
+            "passwordProtection": bool(password)
+        }
+    }
 
 @app.get("/redirect")
 async def redirect_page(request: Request, token: str = Query(None)):
@@ -189,7 +336,62 @@ async def redirect_page(request: Request, token: str = Query(None)):
     token_time = data.get("t", 0)
     if time.time() - token_time > TOKEN_EXPIRY_SECONDS:
         await log_request(request, "TOKEN_EXPIRED", {"age": int(time.time() - token_time)})
-        return HTMLResponse("Link Expired. Please get a new link.", 403)
+        return HTMLResponse("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Link Expired</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #050505;
+            font-family: 'Inter', system-ui, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: white;
+        }
+        .card {
+            background: rgba(15, 15, 15, 0.95);
+            padding: 40px;
+            border-radius: 24px;
+            text-align: center;
+            max-width: 380px;
+            width: 90%;
+            border: 1px solid #333;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        }
+        .icon { font-size: 60px; margin-bottom: 20px; }
+        h1 { color: #fbbf24; font-size: 1.5rem; margin-bottom: 15px; }
+        p { color: #888; font-size: 0.95rem; line-height: 1.6; margin-bottom: 25px; }
+        .btn {
+            background: #fbbf24;
+            color: #000;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 1rem;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn:hover { background: #f59e0b; transform: scale(1.03); }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">⏰</div>
+        <h1>Link Expired</h1>
+        <p>This link has expired. Please request a new link from the original source.</p>
+        <a href="javascript:window.close()" class="btn">Close Tab</a>
+    </div>
+</body>
+</html>
+        """, 403)
     
     link = await DB['links'].find_one({"random_id": data.get("i")})
     if not link: return HTMLResponse("Link Not Found", 404)
@@ -221,31 +423,169 @@ async def redirect_page(request: Request, token: str = Query(None)):
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Verifying...</title>
+    <title>Access Denied</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
-        body{{background:#0a0a0a;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
-        .box{{background:#111;border:1px solid #222;padding:2rem;border-radius:12px;text-align:center;width:320px}}
-        .spinner{{width:40px;height:40px;border:4px solid #333;border-top:4px solid #2563eb;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1rem}}
-        @keyframes spin{{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}
-        #status{{color:#888;font-size:0.95rem;margin-top:1rem}}
-        .error{{color:#ef4444;font-weight:600}}
-        .success{{color:#22c55e}}
-        #errorBox{{display:none;background:#1a0a0a;border:1px solid #ef4444;padding:1rem;border-radius:8px;margin-top:1rem}}
+        @keyframes fadeInZoom {{
+            from {{ opacity: 0; transform: scale(0.9) translateY(20px); }}
+            to {{ opacity: 1; transform: scale(1) translateY(0); }}
+        }}
+        @keyframes glowPulse {{
+            0%, 100% {{ border-color: rgba(255, 71, 87, 0.2); box-shadow: 0 0 20px rgba(0,0,0,0.8); }}
+            50% {{ border-color: rgba(255, 71, 87, 0.5); box-shadow: 0 0 30px rgba(255, 71, 87, 0.2); }}
+        }}
+        @keyframes floating {{
+            0% {{ transform: translateY(0px); }}
+            50% {{ transform: translateY(-10px); }}
+            100% {{ transform: translateY(0px); }}
+        }}
+        @keyframes starMove {{
+            from {{ transform: translateY(0); }}
+            to {{ transform: translateY(-100vh); }}
+        }}
+        @keyframes spin {{
+            from {{ transform: rotate(0deg); }}
+            to {{ transform: rotate(360deg); }}
+        }}
+        @keyframes blink {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.4; }} }}
+        
+        body {{
+            background-color: #050505;
+            font-family: 'Inter', system-ui, sans-serif;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            color: white;
+        }}
+        .bg-animation {{
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, #1a0505 0%, #050505 100%);
+            z-index: -1;
+        }}
+        .stars {{
+            width: 2px; height: 2px;
+            background: transparent;
+            box-shadow: 10vw 20vh #ff4757, 50vw 40vh #ff4757, 80vw 10vh #fff, 30vw 90vh #ff4757;
+            animation: starMove 20s linear infinite;
+        }}
+        #loader {{
+            text-align: center;
+        }}
+        .spinner {{
+            width: 40px; height: 40px;
+            border: 4px solid #333;
+            border-top: 4px solid #ff4757;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }}
+        #status {{ color: #888; font-size: 0.95rem; margin-top: 1rem; }}
+        .success {{ color: #22c55e; }}
+        .alert-card {{
+            background: rgba(15, 15, 15, 0.9);
+            padding: 40px 30px;
+            border-radius: 30px;
+            text-align: center;
+            max-width: 340px;
+            width: 85%;
+            border: 1px solid rgba(255, 71, 87, 0.2);
+            backdrop-filter: blur(15px);
+            animation: fadeInZoom 0.8s ease-out forwards, glowPulse 3s infinite ease-in-out;
+        }}
+        .header-text {{
+            color: #ff4757;
+            font-size: 1.5rem;
+            margin: 0 0 20px 0;
+            font-weight: 800;
+            text-shadow: 0 0 10px rgba(255, 71, 87, 0.4);
+        }}
+        .content-body {{ margin: 20px 0; }}
+        .main-msg {{ color: #ccc; font-size: 1rem; margin: 0.5rem 0; font-weight: 500; }}
+        .era-text {{ color: #888; font-size: 0.9rem; }}
+        .sticker-wrapper {{
+            width: 150px; height: 150px;
+            margin: 15px auto 25px;
+            overflow: hidden;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.02);
+            animation: floating 4s infinite ease-in-out;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+        }}
+        .tg-video-sticker {{ width: 100%; height: 100%; object-fit: cover; }}
+        .status-badge {{
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px 18px;
+            border-radius: 15px;
+            font-size: 0.85rem;
+            color: #aaa;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 30px;
+            border: 1px solid #222;
+        }}
+        .dot {{
+            width: 8px; height: 8px;
+            background: #ff4757;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #ff4757;
+            animation: blink 1s infinite;
+        }}
+        .action-btn {{
+            background: #ffffff;
+            color: #000;
+            border: none;
+            padding: 16px;
+            border-radius: 18px;
+            font-weight: 800;
+            cursor: pointer;
+            width: 100%;
+            font-size: 1rem;
+            transition: 0.3s all;
+        }}
+        .action-btn:hover {{
+            background: #ff4757;
+            color: white;
+            transform: scale(1.03);
+            box-shadow: 0 0 20px rgba(255, 71, 87, 0.4);
+        }}
+        .footer-credit {{ margin-top: 25px; font-size: 0.8rem; color: #555; }}
+        .footer-credit a {{ color: #ff4757; text-decoration: none; font-weight: bold; }}
+        #errorBox {{ display: none; }}
     </style>
 </head>
 <body>
-    <div class="box">
-        <div id="loader">
-            <div class="spinner"></div>
-            <h2>🔐 Verifying...</h2>
-            <p id="status">Please wait...</p>
-        </div>
-        <div id="errorBox">
-            <h2 style="color:#ef4444">❌ Access Denied</h2>
-            <p id="errorMsg" style="color:#888;font-size:0.9rem"></p>
-        </div>
+    <div class="bg-animation"><div class="stars"></div></div>
+    
+    <div id="loader" class="alert-card">
+        <div class="spinner"></div>
+        <h2 style="color:#fff">🔐 Verifying...</h2>
+        <p id="status">Please wait...</p>
     </div>
+    
+    <div id="errorBox" class="alert-card">
+        <h1 class="header-text">🚨 Bypass Detected 🚨</h1>
+        <div class="content-body">
+            <p class="main-msg">"Focus on Life, not bypass"</p>
+            <p class="era-text">(Era of Anti-Bypass)</p>
+        </div>
+        <div class="sticker-wrapper">
+            <video autoplay loop muted playsinline class="tg-video-sticker">
+                <source src="https://files.catbox.moe/1oyunr.webm" type="video/webm">
+            </video>
+        </div>
+        <div class="status-badge">
+            <span class="dot"></span>
+            Attempt Logged: <span id="timestamp"></span>
+        </div>
+        <button class="action-btn" onclick="window.history.back()">Exit Immediately</button>
+        <p class="footer-credit">Access Denied By <a href="https://t.me/DshDm_bot" target="_blank">Durgesh</a></p>
+    </div>
+
     <script>
         const S = {{ sid: "{session_id}", csrf: "{csrf}", n1: {n1}, n2: {n2} }};
 
@@ -267,13 +607,10 @@ async def redirect_page(request: Request, token: str = Query(None)):
 
         async function autoVerify() {{
             document.getElementById('status').innerText = 'Setting up...';
-            
             await new Promise(r => setTimeout(r, 500));
             const fingerprint = getFingerprint();
             document.cookie = "v_init=" + S.sid + ";path=/;max-age=300;SameSite=Lax";
-            
             document.getElementById('status').innerText = 'Verifying...';
-            
             const ans = S.n1 * S.n2;
             try {{
                 const res = await fetch('/verify', {{
@@ -286,17 +623,17 @@ async def redirect_page(request: Request, token: str = Query(None)):
                     document.getElementById('status').innerHTML = '<span class="success">✓ Verified! Redirecting...</span>';
                     setTimeout(() => window.location.href = d.url, 500);
                 }} else {{
-                    showError(d.message);
+                    showError();
                 }}
             }} catch(e) {{
-                showError('Network error. Please try again.');
+                showError();
             }}
         }}
 
-        function showError(msg) {{
+        function showError() {{
             document.getElementById('loader').style.display = 'none';
             document.getElementById('errorBox').style.display = 'block';
-            document.getElementById('errorMsg').innerText = msg;
+            document.getElementById('timestamp').innerText = new Date().toLocaleTimeString().toLowerCase();
         }}
 
         autoVerify();
@@ -352,6 +689,45 @@ async def verify(request: Request, v_init: str = Cookie(None)):
     except Exception as e:
         await log_request(request, "VERIFY_ERROR", {"error": str(e)})
         return JSONResponse({"success": False, "message": "Error"}, 500)
+
+@app.get("/analytics/{token}")
+async def analytics(token: str):
+    try:
+        data = decrypt_token(token)
+        if not data:
+            return JSONResponse({"status": "error", "message": "Invalid Token"}, 400)
+        
+        link = await DB['links'].find_one({"random_id": data.get("i")})
+        
+        expiry_date = None
+        is_expired = False
+        if data.get("e"):
+            expiry_date = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(data["e"]))
+            is_expired = time.time() > data["e"]
+        
+        return {
+            "status": "success",
+            "link_info": {
+                "destination": link["original_url"] if link else "Unknown",
+                "alias": link.get("alias") if link else None,
+                "password_protected": bool(data.get("p")),
+                "expiry_date": expiry_date or "Never",
+                "is_expired": is_expired,
+                "clicks": link.get("clicks", 0) if link else 0,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(link["created_at"])) if link else None
+            }
+        }
+    except:
+        return JSONResponse({"status": "error", "message": "Error reading token"}, 500)
+
+@app.get("/qr/{token}")
+async def qr_code(request: Request, token: str):
+    base = str(request.base_url).rstrip("/")
+    if "localhost" not in base:
+        base = base.replace("http://", "https://")
+    target_url = f"{base}/redirect?token={token}"
+    qr_api_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={quote(target_url)}&bgcolor=ffffff&color=000000"
+    return JSONResponse({"status": "success", "qr_image": qr_api_url, "target_url": target_url})
 
 @app.get("/logs")
 async def view_logs(api: str = Query(None), limit: int = Query(50)):
