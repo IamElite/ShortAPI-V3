@@ -495,7 +495,7 @@ async def redirect_page(request: Request, token: str = Query(None)):
             border-radius: clamp(20px, 5vw, 30px);
             text-align: center;
             max-width: 380px;
-            width: 85%;
+            width: clamp(75%, 320px, 85%);
             border: 1px solid rgba(255, 71, 87, 0.2);
             backdrop-filter: blur(15px);
             animation: fadeInZoom 0.8s ease-out forwards, glowPulse 3s infinite ease-in-out;
@@ -586,7 +586,7 @@ async def redirect_page(request: Request, token: str = Query(None)):
             <span class="dot"></span>
             Attempt Logged: <span id="timestamp"></span>
         </div>
-        <button class="action-btn" onclick="window.history.back()">Exit Immediately</button>
+        <button class="action-btn" onclick="window.close()">Exit Immediately</button>
         <p class="footer-credit">Access Denied By <a href="https://t.me/DshDm_bot" target="_blank">Durgesh</a></p>
     </div>
 
