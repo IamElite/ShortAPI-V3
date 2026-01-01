@@ -355,7 +355,7 @@ async def redirect_page(request: Request, token: str = Query(None)):
         }
         .card {
             background: rgba(15, 15, 15, 0.95);
-            padding: 40px;
+            padding: clamp(25px, 5vw, 40px);
             border-radius: 24px;
             text-align: center;
             max-width: 380px;
@@ -363,9 +363,9 @@ async def redirect_page(request: Request, token: str = Query(None)):
             border: 1px solid #333;
             box-shadow: 0 20px 40px rgba(0,0,0,0.5);
         }
-        .icon { font-size: 60px; margin-bottom: 20px; }
-        h1 { color: #fbbf24; font-size: 1.5rem; margin-bottom: 15px; }
-        p { color: #888; font-size: 0.95rem; line-height: 1.6; margin-bottom: 25px; }
+        .icon { font-size: clamp(40px, 12vw, 60px); margin-bottom: clamp(12px, 3vw, 20px); }
+        h1 { color: #fbbf24; font-size: clamp(1.2rem, 5vw, 1.5rem); margin-bottom: clamp(10px, 2vw, 15px); }
+        p { color: #888; font-size: clamp(0.8rem, 3vw, 0.95rem); line-height: 1.6; margin-bottom: clamp(15px, 4vw, 25px); }
         .btn {
             background: #fbbf24;
             color: #000;
@@ -487,8 +487,8 @@ async def redirect_page(request: Request, token: str = Query(None)):
         .success {{ color: #22c55e; }}
         .alert-card {{
             background: rgba(15, 15, 15, 0.9);
-            padding: 40px 30px;
-            border-radius: 30px;
+            padding: clamp(25px, 6vw, 40px) clamp(20px, 5vw, 30px);
+            border-radius: clamp(20px, 5vw, 30px);
             text-align: center;
             max-width: 340px;
             width: 85%;
@@ -498,19 +498,19 @@ async def redirect_page(request: Request, token: str = Query(None)):
         }}
         .header-text {{
             color: #ff4757;
-            font-size: 1.5rem;
-            margin: 0 0 20px 0;
+            font-size: clamp(1.2rem, 5vw, 1.5rem);
+            margin: 0 0 clamp(12px, 3vw, 20px) 0;
             font-weight: 800;
             text-shadow: 0 0 10px rgba(255, 71, 87, 0.4);
         }}
-        .content-body {{ margin: 20px 0; }}
-        .main-msg {{ color: #ccc; font-size: 1rem; margin: 0.5rem 0; font-weight: 500; }}
-        .era-text {{ color: #888; font-size: 0.9rem; }}
+        .content-body {{ margin: clamp(12px, 3vw, 20px) 0; }}
+        .main-msg {{ color: #ccc; font-size: clamp(0.85rem, 3vw, 1rem); margin: 0.5rem 0; font-weight: 500; }}
+        .era-text {{ color: #888; font-size: clamp(0.75rem, 2.5vw, 0.9rem); }}
         .sticker-wrapper {{
-            width: 150px; height: 150px;
-            margin: 15px auto 25px;
+            width: clamp(100px, 30vw, 150px); height: clamp(100px, 30vw, 150px);
+            margin: clamp(10px, 2vw, 15px) auto clamp(15px, 4vw, 25px);
             overflow: hidden;
-            border-radius: 25px;
+            border-radius: clamp(15px, 4vw, 25px);
             background: rgba(255, 255, 255, 0.02);
             animation: floating 4s infinite ease-in-out;
             box-shadow: 0 10px 20px rgba(0,0,0,0.5);
@@ -518,14 +518,14 @@ async def redirect_page(request: Request, token: str = Query(None)):
         .tg-video-sticker {{ width: 100%; height: 100%; object-fit: cover; }}
         .status-badge {{
             background: rgba(255, 255, 255, 0.05);
-            padding: 10px 18px;
+            padding: clamp(8px, 2vw, 10px) clamp(12px, 3vw, 18px);
             border-radius: 15px;
-            font-size: 0.85rem;
+            font-size: clamp(0.7rem, 2.5vw, 0.85rem);
             color: #aaa;
             display: inline-flex;
             align-items: center;
-            gap: 10px;
-            margin-bottom: 30px;
+            gap: clamp(6px, 2vw, 10px);
+            margin-bottom: clamp(20px, 5vw, 30px);
             border: 1px solid #222;
         }}
         .dot {{
@@ -539,12 +539,12 @@ async def redirect_page(request: Request, token: str = Query(None)):
             background: #ffffff;
             color: #000;
             border: none;
-            padding: 16px;
-            border-radius: 18px;
+            padding: clamp(12px, 3vw, 16px);
+            border-radius: clamp(12px, 3vw, 18px);
             font-weight: 800;
             cursor: pointer;
             width: 100%;
-            font-size: 1rem;
+            font-size: clamp(0.85rem, 3vw, 1rem);
             transition: 0.3s all;
         }}
         .action-btn:hover {{
