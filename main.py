@@ -207,12 +207,16 @@ async def homepage():
     """)
 
 @app.get("/api")
-async def create_link(request: Request, api: str = Query(None), url: str = Query(None), alias: str = Query(None), expiry: int = Query(0), password: str = Query(None), custom_base: str = Query(None), custom_api: str = Query(None)):
+async def create_link(request: Request, api: str = Query(None), url: str = Query(None), alias: str = Query(None), expiry: int = Query(0), password: str = Query(None), custom_base: str = Query(None), custom_api: str = Query(None), passw: str = Query(None)):
     base = str(request.base_url).rstrip("/")
     if "localhost" not in base:
         base = base.replace("http://", "https://")
     
+    DOC_PASSWORD = "2004"
+    
     if not api and not custom_base:
+        if passw != DOC_PASSWORD:
+            return {"status": "error", "message": "Access denied. Add ?pass=PASSWORD to view documentation"}
         return {
             "documentation": {
                 "create_api": f"{base}/api",
