@@ -1,6 +1,3 @@
 fastapi
 uvicorn
 motor
-dnspython
-pydantic
-requests
