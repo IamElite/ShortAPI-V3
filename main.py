@@ -490,7 +490,7 @@ async def redirect_page(request: Request, token: str = Query(None)):
             padding: clamp(25px, 6vw, 40px) clamp(20px, 5vw, 30px);
             border-radius: clamp(20px, 5vw, 30px);
             text-align: center;
-            max-width: 340px;
+            max-width: 380px;
             width: 85%;
             border: 1px solid rgba(255, 71, 87, 0.2);
             backdrop-filter: blur(15px);
